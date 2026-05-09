@@ -246,10 +246,13 @@ fn lookup_is_bounded_and_rejects_handle_traversal() {
 fn render_panels_use_state_ui_or_structured_fallback() {
     let state = demo::reconciliation_initial_state("galgame", "0.1.0");
     let panels = render_panels(&state);
-    assert_eq!(panels.len(), 4);
+    assert_eq!(panels.len(), 7);
     assert_eq!(panels[0].kind, RenderPanelKind::Scene);
-    assert_eq!(panels[2].kind, RenderPanelKind::Actions);
-    assert_eq!(panels[3].kind, RenderPanelKind::Story);
+    assert_eq!(panels[2].kind, RenderPanelKind::Briefing);
+    assert_eq!(panels[3].kind, RenderPanelKind::Cast);
+    assert_eq!(panels[4].kind, RenderPanelKind::Dialogue);
+    assert_eq!(panels[5].kind, RenderPanelKind::Actions);
+    assert_eq!(panels[6].kind, RenderPanelKind::Story);
 
     let fallback = json!({
         "scene": {"location": "Room", "summary": "A quiet room."},
@@ -257,8 +260,9 @@ fn render_panels_use_state_ui_or_structured_fallback() {
         "world": {"quests": ["leave"]}
     });
     let panels = render_panels(&fallback);
-    assert_eq!(panels.len(), 3);
+    assert_eq!(panels.len(), 4);
     assert_eq!(panels[0].title, "Room");
+    assert_eq!(panels[3].kind, RenderPanelKind::Briefing);
 }
 
 #[test]
@@ -270,6 +274,18 @@ fn playbook_exposes_choices_and_git_like_story_branch() {
     assert_eq!(
         playbook.story_style.as_ref().map(|style| style.id.as_str()),
         Some("emotional_reconciliation")
+    );
+    assert_eq!(
+        playbook.plot.as_ref().map(|plot| plot.genre.as_str()),
+        Some("emotional reconciliation")
+    );
+    assert_eq!(playbook.actors.len(), 2);
+    assert_eq!(
+        playbook
+            .conversation
+            .as_ref()
+            .map(|conversation| conversation.current_speaker.as_str()),
+        Some("Mina")
     );
     assert_eq!(
         playbook.active_node.as_ref().map(|node| node.id.as_str()),

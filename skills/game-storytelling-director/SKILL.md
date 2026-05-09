@@ -15,9 +15,20 @@ General turn shape:
 
 1. Identify the player's concrete intent.
 2. Pick the relevant tension axis from the active style.
-3. Narrate one vivid consequence, not a generic summary.
-4. Move one meaningful state track: trust, pressure, clue access, vote, resource, location, or branch head.
-5. End with a changed situation and a few clear next options.
+3. Anchor the scene with the active plot, background, cast, and live dialogue.
+4. Narrate one vivid consequence, not a generic summary.
+5. Move one meaningful state track: trust, pressure, clue access, vote, resource, location, or branch head.
+6. End with a changed situation and a few clear next options.
+
+Presentation rule:
+
+- Do not open a turn with a bare menu. First establish what happened, who is
+  present, what each important figure wants, and what was just said.
+- Choices should feel like possible responses inside the conversation, not UI
+  buttons detached from the scene.
+- If the active save lacks plot, cast, or dialogue data, infer a minimal frame
+  from `scene`, `player`, and `world`, then commit richer frame data when it is
+  safe to do so.
 
 Reliability rules:
 

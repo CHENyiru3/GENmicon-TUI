@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::interaction::{build_playbook, format_playbook};
+use crate::interaction::{build_playbook, format_playbook, format_scene_frame};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RenderPanel {
@@ -18,6 +18,9 @@ pub enum RenderPanelKind {
     Player,
     Goals,
     Log,
+    Briefing,
+    Cast,
+    Dialogue,
     Actions,
     Story,
     Custom,
@@ -83,6 +86,9 @@ fn panel_from_state(index: usize, panel: &Value) -> RenderPanel {
             Some("player") => RenderPanelKind::Player,
             Some("goals") => RenderPanelKind::Goals,
             Some("log") => RenderPanelKind::Log,
+            Some("briefing") => RenderPanelKind::Briefing,
+            Some("cast") => RenderPanelKind::Cast,
+            Some("dialogue") => RenderPanelKind::Dialogue,
             Some("actions") => RenderPanelKind::Actions,
             Some("story") => RenderPanelKind::Story,
             _ => RenderPanelKind::Custom,
@@ -92,6 +98,72 @@ fn panel_from_state(index: usize, panel: &Value) -> RenderPanel {
 
 fn append_playbook_panels(panels: &mut Vec<RenderPanel>, state: &Value) {
     let playbook = build_playbook(state);
+    if let Some(frame) = format_scene_frame(&playbook)
+        && !panels.iter().any(|panel| panel.id == "briefing")
+    {
+        panels.push(RenderPanel {
+            id: "briefing".to_string(),
+            title: "Briefing".to_string(),
+            body: frame,
+            kind: RenderPanelKind::Briefing,
+        });
+    }
+    if !playbook.actors.is_empty() && !panels.iter().any(|panel| panel.id == "cast") {
+        let body = playbook
+            .actors
+            .iter()
+            .map(|actor| {
+                let mut lines = vec![format!("{} - {}", actor.name, actor.role)];
+                if !actor.relationship.is_empty() {
+                    lines.push(format!("relationship: {}", actor.relationship));
+                }
+                if !actor.wants.is_empty() {
+                    lines.push(format!("wants: {}", actor.wants));
+                }
+                if !actor.visible_cue.is_empty() {
+                    lines.push(format!("cue: {}", actor.visible_cue));
+                }
+                lines.join("\n")
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        panels.push(RenderPanel {
+            id: "cast".to_string(),
+            title: "Cast".to_string(),
+            body,
+            kind: RenderPanelKind::Cast,
+        });
+    }
+    if let Some(conversation) = &playbook.conversation
+        && !panels.iter().any(|panel| panel.id == "dialogue")
+    {
+        let mut lines = conversation
+            .last_exchange
+            .iter()
+            .map(|line| {
+                if line.tone.is_empty() {
+                    format!("{}: \"{}\"", line.speaker, line.line)
+                } else {
+                    format!("{} [{}]: \"{}\"", line.speaker, line.tone, line.line)
+                }
+            })
+            .collect::<Vec<_>>();
+        if !conversation.prompt.is_empty() {
+            lines.push(conversation.prompt.clone());
+        }
+        if !conversation.available_topics.is_empty() {
+            lines.push(format!(
+                "Topics: {}",
+                conversation.available_topics.join(", ")
+            ));
+        }
+        panels.push(RenderPanel {
+            id: "dialogue".to_string(),
+            title: "Dialogue".to_string(),
+            body: lines.join("\n"),
+            kind: RenderPanelKind::Dialogue,
+        });
+    }
     if !playbook.suggestions.is_empty() && !panels.iter().any(|panel| panel.id == "actions") {
         panels.push(RenderPanel {
             id: "actions".to_string(),

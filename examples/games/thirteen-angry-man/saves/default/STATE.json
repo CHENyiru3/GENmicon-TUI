@@ -5,10 +5,105 @@
     "id": "deliberation-drama",
     "version": "0.1.0"
   },
+  "plot": {
+    "premise": "A jury room must decide whether a young defendant is guilty, but one dissenting vote forces the room to test certainty under pressure.",
+    "background": "The trial is over. The jurors have only admitted exhibits, testimony summaries, their memories of the courtroom, and the legal standard of reasonable doubt.",
+    "opening_conflict": "Eleven jurors want a fast guilty verdict. Juror 8 has voted not guilty, and Juror 13 has not yet become a trusted voice in the room.",
+    "player_role": "Juror 13, a participant who can question, inspect admitted evidence, request votes, and protect procedure",
+    "genre": "deliberation drama"
+  },
   "scene": {
     "time": "late afternoon",
     "location": "jury room",
-    "summary": "The first ballot has exposed one not-guilty vote against an impatient guilty majority."
+    "summary": "The first ballot has exposed one not-guilty vote against an impatient guilty majority.",
+    "what_happened": "The Foreman counted the first vote. Eleven hands went up for guilty, Juror 8 held out, and the room turned on him before he could fully explain.",
+    "immediate_stakes": "If the room rushes, the verdict hardens before doubt can be tested. If process is protected, evidence and character pressure can begin to move.",
+    "mood": "hot, crowded, impatient, civic duty under strain",
+    "sensory": [
+      "a table scarred by pencils and damp sleeves",
+      "windows that do not open enough",
+      "the Foreman's pencil tapping against the ballot sheet"
+    ]
+  },
+  "cast": [
+    {
+      "id": "juror-13",
+      "name": "You",
+      "role": "player character",
+      "relationship": "new voice in the jury room",
+      "presence": "standing near the end of the long table",
+      "mood": "careful, not yet trusted",
+      "visible_cue": "several jurors look to see whether you will side with speed or process",
+      "wants": "to keep the deliberation legitimate long enough for doubt to be tested",
+      "fear": "losing the room before any concrete reason is heard",
+      "can_talk": true
+    },
+    {
+      "id": "foreman",
+      "name": "Foreman",
+      "role": "procedural organizer",
+      "relationship": "responsible for order, not truth",
+      "presence": "at the head of the table with the ballot sheet",
+      "mood": "strained, trying to keep control",
+      "visible_cue": "his pencil keeps tapping faster when voices overlap",
+      "wants": "a manageable process and a verdict the room can stand behind",
+      "fear": "losing control of the room",
+      "last_line": "One not guilty. All right, then we talk.",
+      "can_talk": true
+    },
+    {
+      "id": "juror-08",
+      "name": "Juror 8",
+      "role": "lone dissenter",
+      "relationship": "the only public not-guilty vote",
+      "presence": "seated apart from the loudest jurors",
+      "mood": "calm but isolated",
+      "visible_cue": "he folds his hands before answering, as if buying one more second",
+      "wants": "a serious discussion before the room condemns someone",
+      "fear": "being dismissed before reasons matter",
+      "last_line": "I do not know. I only know it is not easy enough to end now.",
+      "can_talk": true
+    },
+    {
+      "id": "juror-03",
+      "name": "Juror 3",
+      "role": "angry certainty",
+      "relationship": "loud guilty vote",
+      "presence": "leaning forward across the table",
+      "mood": "impatient, personal, combative",
+      "visible_cue": "his jaw tightens whenever the word doubt enters the room",
+      "wants": "a fast guilty verdict",
+      "fear": "that hesitation will look like weakness",
+      "last_line": "We saw the same trial. What is there to talk about?",
+      "can_talk": true
+    }
+  ],
+  "conversation": {
+    "current_speaker": "Foreman",
+    "prompt": "The room is waiting to see whether Juror 13 protects the dissent, joins the pressure, or redirects the first argument.",
+    "available_topics": [
+      "why Juror 8 voted not guilty",
+      "whether the first vote should end the discussion",
+      "which admitted exhibit to inspect first",
+      "whether the room can slow down without becoming disorderly"
+    ],
+    "last_exchange": [
+      {
+        "speaker": "Foreman",
+        "tone": "strained",
+        "line": "One not guilty. All right, then we talk."
+      },
+      {
+        "speaker": "Juror 3",
+        "tone": "sharp",
+        "line": "Talk? We have been talking all week in court."
+      },
+      {
+        "speaker": "Juror 8",
+        "tone": "quiet",
+        "line": "I am asking for a few minutes, not a verdict from habit."
+      }
+    ]
   },
   "player": {
     "name": "Juror 13",

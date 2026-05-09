@@ -8,10 +8,74 @@ pub fn reconciliation_initial_state(driver_id: &str, driver_version: &str) -> Va
             "id": driver_id,
             "version": driver_version
         },
+        "plot": {
+            "premise": "A relationship is about to end on a station overpass unless the player can speak honestly before she leaves.",
+            "background": "For weeks the player answered fear with jokes, silence, and avoidance. She took that as proof that love had already faded.",
+            "opening_conflict": "She has decided to stop waiting for an answer. The player has one chance to choose honesty over self-protection.",
+            "player_role": "the partner who hurt her by withdrawing",
+            "genre": "emotional reconciliation"
+        },
         "scene": {
             "time": "evening",
             "location": "station overpass",
-            "summary": "She is walking away because she thinks the player no longer loves her."
+            "summary": "She is walking away because she thinks the player no longer loves her.",
+            "what_happened": "A final conversation collapsed into silence; she turned toward the stairs before the player found the courage to answer.",
+            "immediate_stakes": "If the player pressures her or stays vague, she leaves. If the player is specific and restrained, she may stop long enough to talk.",
+            "mood": "rain, hurt restraint, one fragile opening",
+            "sensory": [
+                "train lights dragging across wet concrete",
+                "rain ticking on the metal roof",
+                "her hand tightening around the stair rail"
+            ]
+        },
+        "cast": [
+            {
+                "id": "player",
+                "name": "You",
+                "role": "player character",
+                "relationship": "her partner",
+                "presence": "a few steps behind her on the overpass",
+                "mood": "scared, guilty, still attached",
+                "visible_cue": "your first words keep catching in your throat",
+                "wants": "to make her believe the silence was fear, not indifference",
+                "fear": "that honesty will arrive too late",
+                "can_talk": true
+            },
+            {
+                "id": "girlfriend",
+                "name": "Mina",
+                "role": "the person leaving",
+                "relationship": "girlfriend",
+                "presence": "one step from the stairs",
+                "mood": "hurt, tired, trying not to look back",
+                "visible_cue": "she pauses when the player says her name, but does not turn fully around",
+                "wants": "proof that the player can name the hurt instead of hiding from it",
+                "fear": "being talked into staying without anything changing",
+                "last_line": "If you had something real to say, you would have said it before now.",
+                "can_talk": true
+            }
+        ],
+        "conversation": {
+            "current_speaker": "Mina",
+            "prompt": "She is waiting for a sentence that proves the player understands what happened.",
+            "available_topics": [
+                "why the player went silent",
+                "what she needed that night",
+                "whether love is still present",
+                "letting her leave without blocking her"
+            ],
+            "last_exchange": [
+                {
+                    "speaker": "Mina",
+                    "tone": "quiet, almost finished",
+                    "line": "I cannot keep guessing whether I matter to you."
+                },
+                {
+                    "speaker": "You",
+                    "tone": "unspoken",
+                    "line": "The answer is there, but fear is still in the way."
+                }
+            ]
         },
         "player": {
             "name": "Player",

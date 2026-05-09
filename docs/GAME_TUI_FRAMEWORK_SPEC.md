@@ -323,10 +323,28 @@ simple but structured:
     "id": "rpg",
     "version": "0.1.0"
   },
+  "plot": {
+    "premise": "",
+    "background": "",
+    "opening_conflict": "",
+    "player_role": "",
+    "genre": ""
+  },
   "scene": {
     "time": "",
     "location": "",
-    "summary": ""
+    "summary": "",
+    "what_happened": "",
+    "immediate_stakes": "",
+    "mood": "",
+    "sensory": []
+  },
+  "cast": [],
+  "conversation": {
+    "current_speaker": "",
+    "prompt": "",
+    "available_topics": [],
+    "last_exchange": []
   },
   "player": {
     "name": "",
@@ -385,6 +403,9 @@ repository commits, worktree conflicts, or merges during normal play.
 
 Runtime reliability rules:
 
+- each playable save should carry enough `plot`, `cast`, and `conversation`
+  data to establish what happened, who is present, what they want, and what was
+  just said before showing choices
 - malformed interaction/story edges should surface as `game_playbook` warnings
   instead of crashing normal play
 - every successful player action commits at most one turn

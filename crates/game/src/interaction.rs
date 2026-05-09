@@ -5,6 +5,10 @@ use serde_json::{Map, Value};
 pub struct Playbook {
     pub mode: String,
     pub freeform_allowed: bool,
+    pub plot: Option<PlotBrief>,
+    pub scene: Option<SceneBrief>,
+    pub actors: Vec<ActorBrief>,
+    pub conversation: Option<ConversationBrief>,
     pub active_branch: Option<String>,
     pub active_ref: Option<String>,
     pub story_style: Option<StoryStyleProfile>,
@@ -13,6 +17,56 @@ pub struct Playbook {
     pub active_node: Option<StoryNodeSummary>,
     pub visible_nodes: Vec<StoryNodeSummary>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct PlotBrief {
+    pub premise: String,
+    pub background: String,
+    pub opening_conflict: String,
+    pub player_role: String,
+    pub genre: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct SceneBrief {
+    pub time: String,
+    pub location: String,
+    pub summary: String,
+    pub what_happened: String,
+    pub immediate_stakes: String,
+    pub mood: String,
+    pub sensory: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ActorBrief {
+    pub id: String,
+    pub name: String,
+    pub role: String,
+    pub relationship: String,
+    pub presence: String,
+    pub mood: String,
+    pub visible_cue: String,
+    pub wants: String,
+    pub fear: String,
+    pub last_line: String,
+    pub can_talk: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ConversationBrief {
+    pub current_speaker: String,
+    pub prompt: String,
+    pub available_topics: Vec<String>,
+    pub last_exchange: Vec<DialogueLine>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct DialogueLine {
+    pub speaker: String,
+    pub line: String,
+    pub tone: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -55,6 +109,10 @@ pub struct StoryNodeSummary {
 
 pub fn build_playbook(state: &Value) -> Playbook {
     let mut warnings = Vec::new();
+    let plot = parse_plot_brief(state);
+    let scene = parse_scene_brief(state.get("scene"));
+    let actors = parse_actors(state);
+    let conversation = parse_conversation(state.get("conversation"));
     let mode = state
         .pointer("/interaction/mode")
         .and_then(Value::as_str)
@@ -148,6 +206,10 @@ pub fn build_playbook(state: &Value) -> Playbook {
     Playbook {
         mode,
         freeform_allowed,
+        plot,
+        scene,
+        actors,
+        conversation,
         active_branch,
         active_ref,
         story_style,
@@ -163,6 +225,10 @@ pub fn format_playbook(playbook: &Playbook) -> String {
     let mut lines = Vec::new();
     lines.push("How to Play".to_string());
     lines.push(String::new());
+    if let Some(frame) = format_scene_frame(playbook) {
+        lines.push(frame);
+        lines.push(String::new());
+    }
     if playbook.freeform_allowed {
         lines.push(
             "Type a numbered choice, a bracket command such as [ASK], or a custom action."
@@ -255,6 +321,215 @@ pub fn format_playbook(playbook: &Playbook) -> String {
         );
     }
     lines.join("\n")
+}
+
+pub fn format_scene_frame(playbook: &Playbook) -> Option<String> {
+    if playbook.plot.is_none()
+        && playbook.scene.is_none()
+        && playbook.actors.is_empty()
+        && playbook.conversation.is_none()
+    {
+        return None;
+    }
+
+    let mut lines = Vec::new();
+    if let Some(plot) = &playbook.plot {
+        lines.push("Plot".to_string());
+        if !plot.premise.is_empty() {
+            lines.push(format!("Premise: {}", plot.premise));
+        }
+        if !plot.background.is_empty() {
+            lines.push(format!("Background: {}", plot.background));
+        }
+        if !plot.opening_conflict.is_empty() {
+            lines.push(format!("Opening conflict: {}", plot.opening_conflict));
+        }
+        if !plot.player_role.is_empty() {
+            lines.push(format!("You are: {}", plot.player_role));
+        }
+        if !plot.genre.is_empty() {
+            lines.push(format!("Genre: {}", plot.genre));
+        }
+    }
+
+    if let Some(scene) = &playbook.scene {
+        if !lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines.push("Scene".to_string());
+        if !scene.location.is_empty() || !scene.time.is_empty() {
+            let mut where_when = Vec::new();
+            if !scene.location.is_empty() {
+                where_when.push(scene.location.as_str());
+            }
+            if !scene.time.is_empty() {
+                where_when.push(scene.time.as_str());
+            }
+            lines.push(where_when.join(" / "));
+        }
+        if !scene.summary.is_empty() {
+            lines.push(scene.summary.clone());
+        }
+        if !scene.what_happened.is_empty() {
+            lines.push(format!("What happened: {}", scene.what_happened));
+        }
+        if !scene.immediate_stakes.is_empty() {
+            lines.push(format!("Stakes: {}", scene.immediate_stakes));
+        }
+        if !scene.mood.is_empty() {
+            lines.push(format!("Mood: {}", scene.mood));
+        }
+        if !scene.sensory.is_empty() {
+            lines.push(format!("You notice: {}", scene.sensory.join("; ")));
+        }
+    }
+
+    if !playbook.actors.is_empty() {
+        if !lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines.push("Who is here".to_string());
+        for actor in &playbook.actors {
+            let mut parts = Vec::new();
+            if !actor.role.is_empty() {
+                parts.push(actor.role.as_str());
+            }
+            if !actor.relationship.is_empty() {
+                parts.push(actor.relationship.as_str());
+            }
+            if !actor.presence.is_empty() {
+                parts.push(actor.presence.as_str());
+            }
+            let details = if parts.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", parts.join(", "))
+            };
+            lines.push(format!("- {}{}", actor.name, details));
+            if !actor.mood.is_empty() || !actor.visible_cue.is_empty() {
+                let mood = [actor.mood.as_str(), actor.visible_cue.as_str()]
+                    .into_iter()
+                    .filter(|value| !value.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                if !mood.is_empty() {
+                    lines.push(format!("  {mood}"));
+                }
+            }
+            if !actor.wants.is_empty() {
+                lines.push(format!("  Wants: {}", actor.wants));
+            }
+            if !actor.last_line.is_empty() {
+                lines.push(format!("  Last line: \"{}\"", actor.last_line));
+            }
+        }
+    }
+
+    if let Some(conversation) = &playbook.conversation {
+        if !lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines.push("Live conversation".to_string());
+        for line in &conversation.last_exchange {
+            let tone = if line.tone.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", line.tone)
+            };
+            lines.push(format!("{}{}: \"{}\"", line.speaker, tone, line.line));
+        }
+        if !conversation.current_speaker.is_empty() {
+            lines.push(format!("Current speaker: {}", conversation.current_speaker));
+        }
+        if !conversation.prompt.is_empty() {
+            lines.push(conversation.prompt.clone());
+        }
+        if !conversation.available_topics.is_empty() {
+            lines.push(format!(
+                "Topics you can address: {}",
+                conversation.available_topics.join(", ")
+            ));
+        }
+    }
+
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+fn parse_plot_brief(state: &Value) -> Option<PlotBrief> {
+    let value = state.get("plot").or_else(|| state.pointer("/story/plot"))?;
+    Some(PlotBrief {
+        premise: string_field(value, "premise").unwrap_or_default(),
+        background: string_field(value, "background").unwrap_or_default(),
+        opening_conflict: string_field(value, "opening_conflict").unwrap_or_default(),
+        player_role: string_field(value, "player_role").unwrap_or_default(),
+        genre: string_field(value, "genre").unwrap_or_default(),
+    })
+}
+
+fn parse_scene_brief(value: Option<&Value>) -> Option<SceneBrief> {
+    let value = value?;
+    Some(SceneBrief {
+        time: string_field(value, "time").unwrap_or_default(),
+        location: string_field(value, "location").unwrap_or_default(),
+        summary: string_field(value, "summary").unwrap_or_default(),
+        what_happened: string_field(value, "what_happened").unwrap_or_default(),
+        immediate_stakes: string_field(value, "immediate_stakes").unwrap_or_default(),
+        mood: string_field(value, "mood").unwrap_or_default(),
+        sensory: string_array_field(value, "sensory"),
+    })
+}
+
+fn parse_actors(state: &Value) -> Vec<ActorBrief> {
+    state
+        .get("cast")
+        .or_else(|| state.pointer("/world/cast"))
+        .and_then(Value::as_array)
+        .map(|values| values.iter().filter_map(parse_actor).collect())
+        .unwrap_or_default()
+}
+
+fn parse_actor(value: &Value) -> Option<ActorBrief> {
+    let id = string_field(value, "id").or_else(|| string_field(value, "name"))?;
+    Some(ActorBrief {
+        id: id.clone(),
+        name: string_field(value, "name").unwrap_or(id),
+        role: string_field(value, "role").unwrap_or_default(),
+        relationship: string_field(value, "relationship").unwrap_or_default(),
+        presence: string_field(value, "presence").unwrap_or_default(),
+        mood: string_field(value, "mood").unwrap_or_default(),
+        visible_cue: string_field(value, "visible_cue").unwrap_or_default(),
+        wants: string_field(value, "wants").unwrap_or_default(),
+        fear: string_field(value, "fear").unwrap_or_default(),
+        last_line: string_field(value, "last_line").unwrap_or_default(),
+        can_talk: value
+            .get("can_talk")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+    })
+}
+
+fn parse_conversation(value: Option<&Value>) -> Option<ConversationBrief> {
+    let value = value?;
+    Some(ConversationBrief {
+        current_speaker: string_field(value, "current_speaker").unwrap_or_default(),
+        prompt: string_field(value, "prompt").unwrap_or_default(),
+        available_topics: string_array_field(value, "available_topics"),
+        last_exchange: value
+            .get("last_exchange")
+            .and_then(Value::as_array)
+            .map(|values| values.iter().filter_map(parse_dialogue_line).collect())
+            .unwrap_or_default(),
+    })
+}
+
+fn parse_dialogue_line(value: &Value) -> Option<DialogueLine> {
+    let speaker = string_field(value, "speaker")?;
+    let line = string_field(value, "line")?;
+    Some(DialogueLine {
+        speaker,
+        line,
+        tone: string_field(value, "tone").unwrap_or_default(),
+    })
 }
 
 fn parse_story_style(state: &Value) -> Option<StoryStyleProfile> {

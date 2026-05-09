@@ -28,6 +28,7 @@ choice, a bracket command, or a custom action:
 [ASK] What did you need from me that night?
 ```
 
-The save tracks progress as a small story graph with an emotional
-reconciliation style profile. `story.branches.mainline.head` points at the
-active beat, and `TURN_LOG.jsonl` records committed turns.
+The save starts with a small plot frame: premise, background, opening conflict,
+cast, and the live exchange with Mina. It also tracks progress as a story graph
+with an emotional reconciliation style profile. `story.branches.mainline.head`
+points at the active beat, and `TURN_LOG.jsonl` records committed turns.

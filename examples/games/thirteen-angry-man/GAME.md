@@ -31,7 +31,9 @@ choice, a bracket command, or a custom action:
 [VOTE] I request another vote.
 ```
 
-The story uses git-like branch state and a deliberation drama style profile
-inside the save. `story.active_branch` and `story.branches.<name>.head`
-identify the current route, while each committed turn is appended to
-`TURN_LOG.jsonl`. Normal play does not write to repository git history.
+The save starts with a small plot frame: premise, background, opening conflict,
+key figures in the room, and the live exchange after the first vote. The story
+uses git-like branch state and a deliberation drama style profile inside the
+save. `story.active_branch` and `story.branches.<name>.head` identify the
+current route, while each committed turn is appended to `TURN_LOG.jsonl`.
+Normal play does not write to repository git history.

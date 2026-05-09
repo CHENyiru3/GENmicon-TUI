@@ -9,6 +9,10 @@ Resolve the player's action as a short emotional scene. Keep the focus on what
 the player says or does, how sincerely it lands, and whether the girlfriend has
 reason to pause.
 
+Before listing choices or resolving a turn, ground the scene in the small plot:
+why the relationship is breaking, where both figures stand, what Mina just
+said, and what the player risks by speaking or staying silent.
+
 Use `load_skill` for `game-action-router` when the player picks a numbered
 choice or bracket command. Use `load_skill` for `game-branch-director` when the
 turn may move `story.active_node` or a branch head.

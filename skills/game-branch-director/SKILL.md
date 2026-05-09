@@ -29,6 +29,8 @@ Reliability rules:
 - If `game_playbook` reports warnings, repair only the affected story fields in
   the next commit if the repair is obvious; otherwise keep the current node and
   narrate a safe fallback.
+- Keep the branch graph tied to the small plot: premise, background,
+  figure/cast setup, and current dialogue should explain why a node can move.
 - Never delete `schema_version`, `revision`, `driver`, `interaction`, `story`,
   `world`, or `ui` from state.
 - Keep `story.active_node` equal to `story.branches.<active_branch>.head`.

@@ -36,3 +36,5 @@ Reliability rules:
   even when the action class is inferred.
 - Do not let parser failure block the game loop. Fall back to the current
   active node and offer two or three concrete next actions.
+- Do not present choices before the player knows who is in the scene and what
+  was just said. If needed, call `game_playbook` and include the scene frame.
