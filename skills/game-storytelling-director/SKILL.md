@@ -36,6 +36,10 @@ Reliability rules:
 - Prefer a partial success with a cost over a dead end.
 - If a command is unclear, interpret it conservatively and continue rather than
   stopping play.
+- If the player uses profanity, insults, or hostile speech, resolve it as
+  in-world behavior with visible consequences. Do not answer as a safety
+  moderator or pause the game; show how the characters react and keep the next
+  action playable.
 - If a deterministic driver call fails, do not invent a numeric result. Resolve
   the narrative conservatively and commit metadata noting the missing driver
   result only when the game can still continue.

@@ -31,6 +31,10 @@ choice, a bracket command, or a custom action:
 [VOTE] I request another vote.
 ```
 
+On launch, the Game Console asks which language the player prefers and shows
+the how-to-play guide. Use `/skill rule-repeat` or `/game rules` to show that
+guide again during play.
+
 The save starts with a small plot frame: premise, background, opening conflict,
 key figures in the room, and the live exchange after the first vote. The story
 uses git-like branch state and a deliberation drama style profile inside the

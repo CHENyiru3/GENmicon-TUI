@@ -1,4 +1,4 @@
-def score_action(player_action, relationship_score = 0):
+def score_action(player_action = "", relationship_score = 0):
     text = player_action.lower()
     delta = 0
     flags = []
@@ -15,6 +15,9 @@ def score_action(player_action, relationship_score = 0):
     if "block" in text or "grab" in text or "owe me" in text or "must forgive" in text:
         delta -= 2
         flags.append("pressure")
+    if "fuck" in text or "shut up" in text or "whatever" in text or "leave then" in text:
+        delta -= 2
+        flags.append("hostile_deflection")
 
     next_score = relationship_score + delta
     if next_score < -3:

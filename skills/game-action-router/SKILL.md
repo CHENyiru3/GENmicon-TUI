@@ -13,6 +13,10 @@ Treat the active save's `interaction` block as the player-facing command menu:
 - A bracket command such as `[ASK]`, `[INSPECT]`, `[VOTE]`, or `[APOLOGIZE]` sets the action class.
 - Free-form text after the command is still important player intent.
 - If the player types only natural language, infer the closest command but preserve the original text in `player_input`.
+- Profanity, insults, threats, and hostile lines are still player actions. Do
+  not stop play or scold out of character; route them to the nearest in-scene
+  consequence such as pressure, deflection, intimidation, trust loss, or
+  procedure risk.
 
 Do not reject creative actions only because they are not listed. The menu is an affordance, not a parser cage, unless `freeform_allowed` is false.
 

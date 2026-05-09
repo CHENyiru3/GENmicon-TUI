@@ -28,6 +28,10 @@ choice, a bracket command, or a custom action:
 [ASK] What did you need from me that night?
 ```
 
+On launch, the Game Console asks which language the player prefers and shows
+the how-to-play guide. Use `/skill rule-repeat` or `/game rules` to show that
+guide again during play.
+
 The save starts with a small plot frame: premise, background, opening conflict,
 cast, and the live exchange with Mina. It also tracks progress as a story graph
 with an emotional reconciliation style profile. `story.branches.mainline.head`

@@ -118,10 +118,24 @@ pub fn run_skill(app: &mut App, name: Option<&str>) -> CommandResult {
         "update" => return update_skill(app, rest),
         "uninstall" => return uninstall_skill(app, rest),
         "trust" => return trust_skill(app, rest),
+        "rule-repeat" => return rule_repeat(app),
         _ => {}
     }
 
     activate_skill(app, raw)
+}
+
+fn rule_repeat(app: &mut App) -> CommandResult {
+    let Some(session) = app.game_session.as_ref() else {
+        return CommandResult::message(
+            "No active Game Console session. Use /play <game-or-path>, then /skill rule-repeat."
+                .to_string(),
+        );
+    };
+    match session.rules_report() {
+        Ok(report) => CommandResult::message(report),
+        Err(err) => CommandResult::error(format!("failed to read game rules: {err}")),
+    }
 }
 
 fn activate_skill(app: &mut App, name: &str) -> CommandResult {
@@ -607,6 +621,17 @@ mod tests {
         let result = run_skill(&mut app, Some("uninstall absent-skill"));
         let msg = result.message.unwrap();
         assert!(msg.contains("not installed"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_skill_rule_repeat_without_game_guides_to_play() {
+        let tmpdir = TempDir::new().unwrap();
+        let _home = IsolatedHome::new(&tmpdir);
+        let mut app = create_test_app_with_tmpdir(&tmpdir);
+        let result = run_skill(&mut app, Some("rule-repeat"));
+        let msg = result.message.unwrap();
+        assert!(msg.contains("No active Game Console session"), "got: {msg}");
+        assert!(msg.contains("/play"), "got: {msg}");
     }
 
     #[test]

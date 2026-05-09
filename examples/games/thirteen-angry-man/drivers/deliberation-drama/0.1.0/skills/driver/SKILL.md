@@ -18,3 +18,15 @@ Driver policy:
 - Let sub-agents propose scoped reactions only. They do not own truth or saves.
 - Detect outside evidence, sealed-fact leakage, intimidation, and meta-play as
   procedure risks.
+
+Call `game_run_driver` with an explicit declared function and named args, for
+example:
+
+```json
+{
+  "function": "detect_procedure_risk",
+  "args": {
+    "player_action": "<player action text>"
+  }
+}
+```

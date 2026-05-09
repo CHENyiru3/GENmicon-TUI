@@ -122,6 +122,16 @@ impl GameSession {
         }
     }
 
+    pub fn rules_report(&self) -> Result<String> {
+        match self {
+            Self::Loaded(session) => session.rules_report(),
+            Self::Notice(notice) => Ok(format!(
+                "No loaded Game Console session: {}\n\nUse /play <game-or-path> to start a game.",
+                notice.message
+            )),
+        }
+    }
+
     pub fn skill_directories(&self) -> Vec<PathBuf> {
         match self {
             Self::Loaded(session) => session.skill_directories(),
@@ -183,6 +193,7 @@ impl LoadedGameSession {
                     .unwrap_or(&self.driver_requirement)
             ),
         ];
+        append_player_rules(&mut lines);
 
         if self.developer_mode {
             lines.push(format!("Game root: {}", self.game_root.display()));
@@ -235,6 +246,22 @@ impl LoadedGameSession {
         Ok(format_playbook(&build_playbook(&save.state)))
     }
 
+    fn rules_report(&self) -> Result<String> {
+        let save = load_save(&self.saves_root, &self.save_id)?;
+        let playbook = build_playbook(&save.state);
+        let mut lines = vec![
+            "Rule Repeat".to_string(),
+            String::new(),
+            format!("{} ({})", self.title, self.game_id),
+            format!("Save: {} @ revision {}", self.save_id, self.revision),
+        ];
+        append_player_rules(&mut lines);
+        lines.push(String::new());
+        lines.push("Current playbook".to_string());
+        lines.push(format_playbook(&playbook));
+        Ok(lines.join("\n"))
+    }
+
     fn skill_directories(&self) -> Vec<PathBuf> {
         let mut dirs = vec![
             self.game_root.join("skills"),
@@ -245,6 +272,23 @@ impl LoadedGameSession {
         }
         dirs.into_iter().filter(|dir| dir.is_dir()).collect()
     }
+}
+
+fn append_player_rules(lines: &mut Vec<String>) {
+    lines.push(String::new());
+    lines.push("Language preference".to_string());
+    lines.push(
+        "Before the first turn, tell me what language you want to play in: English, Chinese, bilingual, or another preference. You can change it anytime by saying so."
+            .to_string(),
+    );
+    lines.push(String::new());
+    lines.push("How to play".to_string());
+    lines.push("- Type a natural action, a line of dialogue, a numbered choice, or a bracket command such as [ASK], [INSPECT], [VOTE], or [APOLOGIZE].".to_string());
+    lines.push("- Freedom is allowed inside the framework: custom actions are playable, while the cartridge keeps scene facts, state, branch gates, and consequences coherent.".to_string());
+    lines.push(
+        "- Use /game choices for current options, /game render for the scene, /game status for save status, and /skill rule-repeat to see this guide again."
+            .to_string(),
+    );
 }
 
 pub fn load_game_session(workspace: &Path, launch: GameLaunchOptions) -> Result<GameSession> {
@@ -433,6 +477,17 @@ mod tests {
         assert!(session.driver_root.is_some());
         assert!(!session.panels.is_empty());
         assert!(session.warnings.is_empty(), "{:?}", session.warnings);
+        let intro = session.transcript_intro();
+        assert!(intro.contains("Language preference"), "{intro}");
+        assert!(intro.contains("/skill rule-repeat"), "{intro}");
+        assert!(
+            intro.contains("Freedom is allowed inside the framework"),
+            "{intro}"
+        );
+
+        let rules = session.rules_report().expect("rules report");
+        assert!(rules.contains("Rule Repeat"), "{rules}");
+        assert!(rules.contains("Current playbook"), "{rules}");
     }
 
     #[test]

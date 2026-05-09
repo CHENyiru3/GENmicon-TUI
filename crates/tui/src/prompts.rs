@@ -32,7 +32,8 @@ fn render_game_session_block(game_session: &crate::game::GameSession) -> String 
     block.push_str(
         "\n\nGame rules for this turn:\n\
          - Resolve player actions as gameplay, not as repository work.\n\
-         - Use `game_status`, `game_render`, `game_playbook`, `game_lookup`, and `game_run_driver` for game facts, current choices, story nodes, and deterministic driver logic.\n\
+         - At game entry, ask for and honor the player's preferred play language. If the player replies with only a language preference, acknowledge it and continue in that language without committing a game turn.\n\
+         - Use `game_status`, `game_render`, `game_playbook`, `game_lookup`, and `game_run_driver` for game facts, current choices, story nodes, and deterministic driver logic. For save state keys such as `world.flags`, call `game_lookup` with `state_path`; for fixed content, call it with `handle` or `query`. For driver scoring, call `game_run_driver` with `function` plus `args`, including `player_action` when the player typed freeform text.\n\
          - Use the active story style from `game_playbook` to adapt narration, pacing, tension axes, and branch movement to the cartridge's plot type.\n\
          - Treat story progress as a git-like graph in save state: each committed turn advances the active node/ref only when a visible gate is satisfied. Do not use the user's repository git history as the game save.\n\
          - Load game or driver skills with `load_skill` only when the current action needs that rule pack.\n\

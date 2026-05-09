@@ -646,6 +646,13 @@ Disallowed in player mode:
 Developer mode can re-enable normal inspection tools and raw state views, but
 must be visually distinct from player mode.
 
+On game entry, the TUI must show a player-facing language-preference prompt and
+the basic how-to-play guide before choices. The guide should make clear that the
+player may type natural language actions, dialogue, numbered choices, or bracket
+commands, while the cartridge framework preserves state, branch gates, and
+consequences. Players can repeat the guide at any time with `/skill rule-repeat`
+or `/game rules`.
+
 ### Tool ABIs
 
 `game_playbook` has no input. It returns the active save's current command
@@ -659,15 +666,19 @@ save.
 {
   "handle": "locations/apartment",
   "query": "where did the argument start?",
+  "state_path": "world.flags",
   "max_bytes": 16384
 }
 ```
 
-At least one of `handle` or `query` is required. Handles resolve through
-`content/INDEX.md` and declared content roots. Queries search only declared
-content roots. The default return budget is 16 KiB; the hard per-call cap is
-32 KiB. Results are compact excerpts with source handles, never raw unbounded
-files.
+At least one of `handle`, `query`, or `state_path` is expected. `key` is accepted
+as a repair alias for `state_path`. Handles resolve through `content/INDEX.md`
+and declared content roots. Queries search only declared content roots. State
+paths read bounded active-save JSON values using dot paths such as `world.flags`
+or JSON pointers such as `/world/flags`. Empty calls return a compact usage guide
+instead of failing. The default return budget is 16 KiB; the hard per-call cap is
+32 KiB. Content results are compact excerpts with source handles, never raw
+unbounded files.
 
 `game_run_driver` input:
 
@@ -681,10 +692,13 @@ files.
 }
 ```
 
-The function must be declared in `driver.toml`. The runtime calls the mapped
-Starlark function with JSON-compatible arguments and returns a JSON-compatible
-result plus warnings. It cannot mutate saves, read files, run shell commands, or
-access the network.
+The function must be declared in `driver.toml`. When a driver declares exactly
+one function, the runtime may infer it for repair, but cartridges should still
+teach agents to pass the explicit function. Top-level `player_action` or
+`action` is copied into `args.player_action` when the model omits the nested
+arg. The runtime calls the mapped Starlark function with JSON-compatible
+arguments and returns a JSON-compatible result plus warnings. It cannot mutate
+saves, read files, run shell commands, or access the network.
 
 `game_commit_turn` input:
 

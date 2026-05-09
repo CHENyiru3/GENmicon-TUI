@@ -19,8 +19,11 @@ turn may move `story.active_node` or a branch head.
 Use `load_skill` for `game-storytelling-director` when the turn needs stronger
 emotional pacing or style-specific narration.
 
-Use `game_lookup` for scene facts when needed. Use `game_run_driver` for the
-declared `score_action` function before deciding the state patch. Commit exactly
+Use `game_lookup` for scene facts when needed; pass `state_path` for active save
+keys such as `world.flags` and `handle` or `query` for fixed content. Use
+`game_run_driver` for the declared `score_action` function before deciding the
+state patch, with `args.player_action` set to the player's exact action text and
+`args.relationship_score` set from current state when available. Commit exactly
 one turn with `game_commit_turn`.
 
 State guidance:
@@ -30,6 +33,8 @@ State guidance:
   avoidance, or emotional confusion.
 - Set `world.flags.pressured_her = true` if the player blocks her path, demands
   forgiveness, or centers their own pain.
+- Treat insults, profanity, and dismissive lines as hostile deflection. Resolve
+  them in character as trust damage, not as an out-of-game refusal.
 - Keep `story.branches.mainline.head` aligned with `story.active_node`.
 - Move `opening_apology` to `resolved` when an action lands, then activate the
   next node that best matches the action.
