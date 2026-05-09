@@ -108,6 +108,8 @@ struct Cli {
 enum Commands {
     /// Run interactive/non-interactive flows via the TUI binary.
     Run(RunArgs),
+    /// Open the TUI in Game Console presentation.
+    Play(TuiPassthroughArgs),
     /// Run DeepSeek TUI diagnostics.
     Doctor(TuiPassthroughArgs),
     /// List live DeepSeek API models via the TUI binary.
@@ -432,6 +434,10 @@ fn run() -> Result<()> {
         Some(Commands::Run(args)) => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
             delegate_to_tui(&cli, &resolved_runtime, args.args)
+        }
+        Some(Commands::Play(args)) => {
+            let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
+            delegate_to_tui(&cli, &resolved_runtime, tui_args("play", args))
         }
         Some(Commands::Doctor(args)) => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);

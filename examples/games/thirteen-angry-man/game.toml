@@ -1,0 +1,17 @@
+[game]
+id = "thirteen-angry-man"
+title = "Thirteen Angry Man"
+version = "0.1.0"
+entry_skill = "deliberation"
+default_save = "default"
+
+[driver]
+id = "deliberation-drama"
+version = "^0.1"
+
+[content]
+index = "content/INDEX.md"
+roots = ["content"]
+
+[saves]
+root = "saves"

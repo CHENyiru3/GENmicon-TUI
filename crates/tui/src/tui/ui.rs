@@ -543,6 +543,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         goal_objective: app.goal.goal_objective.clone(),
         locale_tag: app.ui_locale.tag().to_string(),
         workshop: config.workshop.clone(),
+        game_session: app.game_session.clone(),
     }
 }
 
@@ -3739,6 +3740,7 @@ async fn dispatch_user_message(
             prompts::PromptSessionContext {
                 user_memory_block: None,
                 goal_objective: app.goal.goal_objective.as_deref(),
+                game_session: app.game_session.as_ref(),
                 locale_tag: app.ui_locale.tag(),
             },
         ),
@@ -3832,6 +3834,7 @@ async fn dispatch_user_message(
             trust_mode: app.trust_mode,
             auto_approve: app.mode == AppMode::Yolo,
             approval_mode: app.approval_mode,
+            game_session: app.game_session.clone(),
         })
         .await
     {

@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 /// Operations that can be submitted to the engine.
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum Op {
     /// Send a message to the AI
     SendMessage {
@@ -30,6 +31,7 @@ pub enum Op {
         trust_mode: bool,
         auto_approve: bool,
         approval_mode: ApprovalMode,
+        game_session: Option<crate::game::GameSession>,
     },
 
     /// Cancel the current request

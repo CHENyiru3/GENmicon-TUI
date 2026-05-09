@@ -9,6 +9,9 @@ Current boundary note (v0.8.6):
   (`core/engine/lsp_hooks.rs`), providing inline diagnostics after every edit_file/apply_patch/write_file.
 - The swarm agent system was removed in v0.8.5 in favour of sub-agents (agent_spawn) and RLM (rlm_query).
   No model-visible swarm tool remains in the active codebase.
+- Game TUI is implemented as a TUI-owned Game Console scaffold. Its
+  authoritative planning spec is `docs/GAME_TUI_FRAMEWORK_SPEC.md`; it must stay
+  TUI-owned and must not depend on an external Gen-micom repo or Python CLI.
 
 ## High-Level Overview
 
@@ -150,6 +153,31 @@ drives turns through Chat Completions.
 
 - **`ui.rs`** - Legacy/simple UI utilities
 
+### Game TUI Framework
+
+`deepseek play` is implemented as a Game Console presentation inside the
+existing TUI, not as a separate terminal application or event loop. The
+authoritative plan is
+[`GAME_TUI_FRAMEWORK_SPEC.md`](GAME_TUI_FRAMEWORK_SPEC.md); this section only
+records architectural attachment points.
+
+The implementation includes a required pure Rust `crates/game` runtime for
+manifests, path validation, bounded lookup, constrained Starlark driver
+functions, structured render data, and atomic save commits. That crate must not
+depend on ratatui, the TUI, the LLM client, shell/network execution, Python, or
+external game repos.
+
+The TUI side wires `crates/cli`, `crates/tui/src/main.rs`, `commands/`,
+`tui/app.rs`, `tui/ui.rs`, `core/engine/tool_setup.rs`,
+`tools/registry.rs`, `skills/`, and `tools/subagent/` into a `GameSession`
+presentation/tool-profile state. V1 must not add `AppMode::Game`.
+
+The player tool profile is a whitelist around native `game_*` tools,
+game-scoped `game_agent_*` helpers, and required skill-loading support. Normal
+coding tools stay out of player mode unless developer mode is explicitly active.
+See
+[`GAME_TUI_FRAMEWORK_SPEC.md`](GAME_TUI_FRAMEWORK_SPEC.md).
+
 ### LSP Integration
 
 - **`lsp/`** - Post-edit diagnostics injection (#136)
@@ -289,7 +317,7 @@ command = "echo 'Running tool: $TOOL_NAME'"
    Windows require helper enforcement before they should be treated as full OS
    sandboxing.
 5. **Minimal dependencies**: Careful dependency selection for build speed
-6. **Local-first runtime API**: HTTP/SSE endpoints are intended for trusted localhost access and are served by the `crates/tui` runtime today
+6. **Local-first runtime API**: HTTP/SSE endpoints are intended for trusted localhost access and are currently served by the `crates/tui` runtime
 
 ## Configuration Files
 

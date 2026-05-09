@@ -17,12 +17,26 @@ use std::path::{Path, PathBuf};
 pub struct PromptSessionContext<'a> {
     pub user_memory_block: Option<&'a str>,
     pub goal_objective: Option<&'a str>,
+    pub game_session: Option<&'a crate::game::GameSession>,
     /// Resolved BCP-47 locale tag for the `## Environment` block in
     /// the system prompt (e.g. `"en"`, `"zh-Hans"`, `"ja"`). The
     /// caller is responsible for resolving this from `Settings`; no
     /// disk I/O happens inside the prompt builder, so the workspace-
     /// static portion of the system prompt stays cache-friendly.
     pub locale_tag: &'a str,
+}
+
+fn render_game_session_block(game_session: &crate::game::GameSession) -> String {
+    let mut block = String::from("## Game Console\n\n");
+    block.push_str(&game_session.transcript_intro());
+    block.push_str(
+        "\n\nGame rules for this turn:\n\
+         - Resolve player actions as gameplay, not as repository work.\n\
+         - Use `game_status`, `game_render`, `game_lookup`, and `game_run_driver` for game facts and deterministic driver logic.\n\
+         - Persist authoritative state only with `game_commit_turn` using the current save revision.\n\
+         - Do not use ordinary coding, shell, git, network, or file-editing tools for player-mode gameplay.",
+    );
+    block
 }
 
 /// Conventional location for the structured session-handoff artifact (#32).
@@ -333,6 +347,7 @@ pub fn system_prompt_for_mode_with_context_and_skills(
         PromptSessionContext {
             user_memory_block,
             goal_objective: None,
+            game_session: None,
             locale_tag: "en",
         },
     )
@@ -420,6 +435,13 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
         full_prompt = format!(
             "{full_prompt}\n\n## Current Session Goal\n\n<session_goal>\n{}\n</session_goal>",
             goal_objective.trim()
+        );
+    }
+
+    if let Some(game_session) = session_context.game_session {
+        full_prompt = format!(
+            "{full_prompt}\n\n{}",
+            render_game_session_block(game_session)
         );
     }
 
@@ -545,6 +567,7 @@ mod tests {
             PromptSessionContext {
                 user_memory_block: None,
                 goal_objective: None,
+                game_session: None,
                 locale_tag: "ja",
             },
         ) {
@@ -716,6 +739,7 @@ mod tests {
             PromptSessionContext {
                 user_memory_block: None,
                 goal_objective: Some("Fix transcript corruption"),
+                game_session: None,
                 locale_tag: "en",
             },
         ) {
@@ -743,6 +767,7 @@ mod tests {
             PromptSessionContext {
                 user_memory_block: None,
                 goal_objective: Some("   "),
+                game_session: None,
                 locale_tag: "en",
             },
         ) {

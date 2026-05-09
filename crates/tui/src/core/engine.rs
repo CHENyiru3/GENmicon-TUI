@@ -153,6 +153,8 @@ pub struct EngineConfig {
     pub strict_tool_mode: bool,
     /// Workshop / large-tool-output routing (#548). `None` disables routing.
     pub workshop: Option<crate::tools::large_output_router::WorkshopConfig>,
+    /// Active Game Console session for game-safe tools and prompt context.
+    pub game_session: Option<crate::game::GameSession>,
 }
 
 impl Default for EngineConfig {
@@ -186,6 +188,7 @@ impl Default for EngineConfig {
             goal_objective: None,
             locale_tag: "en".to_string(),
             workshop: None,
+            game_session: None,
         }
     }
 }
@@ -442,6 +445,7 @@ impl Engine {
                 prompts::PromptSessionContext {
                     user_memory_block: user_memory_block.as_deref(),
                     goal_objective: config.goal_objective.as_deref(),
+                    game_session: config.game_session.as_ref(),
                     locale_tag: &config.locale_tag,
                 },
                 session.approval_mode,
@@ -583,6 +587,7 @@ impl Engine {
                     trust_mode,
                     auto_approve,
                     approval_mode,
+                    game_session,
                 } => {
                     self.handle_send_message(
                         content,
@@ -596,6 +601,7 @@ impl Engine {
                         trust_mode,
                         auto_approve,
                         approval_mode,
+                        game_session,
                     )
                     .await;
                 }
@@ -794,6 +800,7 @@ impl Engine {
                         self.session.trust_mode,
                         self.session.auto_approve,
                         self.session.approval_mode,
+                        self.config.game_session.clone(),
                     )
                     .await;
                 }
@@ -880,6 +887,7 @@ impl Engine {
         trust_mode: bool,
         auto_approve: bool,
         approval_mode: crate::tui::approval::ApprovalMode,
+        game_session: Option<crate::game::GameSession>,
     ) {
         // Reset cancel token for fresh turn (in case previous was cancelled)
         self.reset_cancel_token();
@@ -963,6 +971,7 @@ impl Engine {
         } else {
             approval_mode
         };
+        self.config.game_session = game_session;
 
         // Update system prompt to match current mode and include persisted compaction context.
         self.refresh_system_prompt(mode);
@@ -1027,6 +1036,12 @@ impl Engine {
             None
         };
 
+        let player_game_profile = self
+            .config
+            .game_session
+            .as_ref()
+            .is_some_and(|session| !session.developer_mode());
+
         let tool_registry = match mode {
             AppMode::Agent | AppMode::Yolo => {
                 if self.config.features.enabled(Feature::Subagents) {
@@ -1059,14 +1074,14 @@ impl Engine {
                     } else {
                         None
                     };
-                    Some(
-                        builder
-                            .with_subagent_tools(
-                                self.subagent_manager.clone(),
-                                runtime.expect("sub-agent runtime should exist with active client"),
-                            )
-                            .build(tool_context),
-                    )
+                    let runtime =
+                        runtime.expect("sub-agent runtime should exist with active client");
+                    let builder = if player_game_profile {
+                        builder.with_game_subagent_tools(self.subagent_manager.clone(), runtime)
+                    } else {
+                        builder.with_subagent_tools(self.subagent_manager.clone(), runtime)
+                    };
+                    Some(builder.build(tool_context))
                 } else {
                     Some(builder.build(tool_context))
                 }
@@ -1074,7 +1089,7 @@ impl Engine {
             _ => Some(builder.build(tool_context)),
         };
 
-        let mcp_tools = if self.config.features.enabled(Feature::Mcp) {
+        let mcp_tools = if self.config.features.enabled(Feature::Mcp) && !player_game_profile {
             self.mcp_tools().await
         } else {
             Vec::new()
@@ -1500,6 +1515,8 @@ impl Engine {
             ctx = ctx.with_sandbox_backend(std::sync::Arc::clone(backend));
         }
 
+        ctx = ctx.with_game_session(self.config.game_session.clone());
+
         let policy = sandbox_policy_for_mode(mode, &self.session.workspace);
         let mut ctx = ctx.with_elevated_sandbox_policy(policy);
         if matches!(mode, AppMode::Plan) {
@@ -1862,6 +1879,7 @@ impl Engine {
             prompts::PromptSessionContext {
                 user_memory_block: user_memory_block.as_deref(),
                 goal_objective: self.config.goal_objective.as_deref(),
+                game_session: self.config.game_session.as_ref(),
                 locale_tag: &self.config.locale_tag,
             },
             self.session.approval_mode,

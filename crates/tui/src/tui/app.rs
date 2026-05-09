@@ -451,6 +451,8 @@ pub struct TuiOptions {
     /// session with the PR context already typed — the user can edit
     /// before sending or hit Enter to fire as-is.
     pub initial_input: Option<String>,
+    /// Optional Game Console session loaded before the TUI starts.
+    pub game_session: Option<crate::game::GameSession>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -737,6 +739,9 @@ pub struct App {
     pub context_panel: bool,
     /// File-tree pane state. `None` when hidden; `Some` when visible.
     pub file_tree: Option<crate::tui::file_tree::FileTreeState>,
+    /// Active Game Console state. This is presentation/tool-profile state, not
+    /// a fourth `AppMode`.
+    pub game_session: Option<crate::game::GameSession>,
     #[allow(dead_code)]
     pub compact_threshold: usize,
     pub max_input_history: usize,
@@ -1118,6 +1123,7 @@ impl App {
             yolo,
             resume_session_id: _,
             initial_input,
+            game_session,
         } = options;
 
         let provider = config.api_provider();
@@ -1250,7 +1256,7 @@ impl App {
             }
             _ => (String::new(), 0),
         };
-        Self {
+        let mut app = Self {
             mode: initial_mode,
             composer: ComposerState {
                 input: initial_input_text,
@@ -1320,6 +1326,7 @@ impl App {
             sidebar_focus,
             context_panel: settings.context_panel,
             file_tree: None,
+            game_session: None,
             compact_threshold,
             max_input_history,
             allow_shell,
@@ -1429,7 +1436,49 @@ impl App {
             collapsed_cell_map: Vec::new(),
             edit_in_progress: false,
             lsp_enabled: config.lsp.as_ref().and_then(|l| l.enabled).unwrap_or(true),
+        };
+
+        if let Some(game_session) = game_session {
+            app.install_game_session(game_session);
         }
+
+        app
+    }
+
+    pub(crate) fn install_game_session(&mut self, game_session: crate::game::GameSession) {
+        let status = game_session.status_label();
+        let intro = game_session.transcript_intro();
+        self.game_session = Some(game_session);
+        self.add_message(HistoryCell::System { content: intro });
+        self.push_status_toast(status, StatusToastLevel::Info, Some(8_000));
+    }
+
+    pub(crate) fn render_game_session(&mut self) -> Option<String> {
+        let content = self
+            .game_session
+            .as_ref()
+            .map(crate::game::GameSession::transcript_intro)?;
+        self.add_message(HistoryCell::System {
+            content: content.clone(),
+        });
+        self.push_status_toast("Game Console rendered", StatusToastLevel::Info, Some(4_000));
+        Some(content)
+    }
+
+    pub(crate) fn set_game_developer_mode(&mut self, enabled: bool) -> Option<String> {
+        let game_session = self.game_session.as_mut()?;
+        game_session.set_developer_mode(enabled);
+        let status = format!(
+            "Game Console developer mode {}",
+            if enabled { "enabled" } else { "disabled" }
+        );
+        self.push_status_toast(status.clone(), StatusToastLevel::Info, Some(4_000));
+        Some(status)
+    }
+
+    pub(crate) fn clear_game_session(&mut self) {
+        self.game_session = None;
+        self.push_status_toast("Game Console closed", StatusToastLevel::Info, Some(4_000));
     }
 
     fn discover_cached_skills(workspace: &std::path::Path) -> Vec<(String, String)> {
@@ -3921,6 +3970,7 @@ mod tests {
             yolo,
             resume_session_id: None,
             initial_input: None,
+            game_session: None,
         }
     }
 

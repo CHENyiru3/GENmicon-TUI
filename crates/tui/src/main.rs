@@ -33,6 +33,7 @@ mod error_taxonomy;
 mod eval;
 mod execpolicy;
 mod features;
+mod game;
 mod handoff;
 mod hooks;
 mod llm_client;
@@ -209,6 +210,8 @@ enum Commands {
     Models(ModelsArgs),
     /// Run a non-interactive prompt
     Exec(ExecArgs),
+    /// Open the TUI in Game Console presentation
+    Play(PlayArgs),
     /// Run a code review over a git diff
     Review(ReviewArgs),
     /// Open the TUI pre-seeded with a GitHub PR's title, body, and diff (#451)
@@ -282,6 +285,19 @@ struct ExecArgs {
     /// Emit machine-readable JSON output
     #[arg(long, default_value_t = false)]
     json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+struct PlayArgs {
+    /// Game package id or path. Defaults to the current workspace when it contains game.toml.
+    #[arg(value_name = "GAME_OR_PATH")]
+    game_or_path: Option<PathBuf>,
+    /// Save id to load.
+    #[arg(long)]
+    save: Option<String>,
+    /// Enable Game Console developer presentation for this launch.
+    #[arg(long)]
+    dev: bool,
 }
 
 fn join_prompt_parts(parts: &[String]) -> String {
@@ -695,6 +711,21 @@ async fn main() -> Result<()> {
                     run_one_shot(&config, &model, &prompt).await
                 }
             }
+            Commands::Play(args) => {
+                let config = load_config_from_cli(&cli)?;
+                run_interactive(
+                    &cli,
+                    &config,
+                    None,
+                    None,
+                    Some(game::GameLaunchOptions {
+                        game_or_path: args.game_or_path,
+                        save: args.save,
+                        developer_mode: args.dev,
+                    }),
+                )
+                .await
+            }
             Commands::Review(args) => {
                 let config = load_config_from_cli(&cli)?;
                 run_review(&config, args).await
@@ -768,13 +799,13 @@ async fn main() -> Result<()> {
                 let config = load_config_from_cli(&cli)?;
                 let workspace = resolve_workspace(&cli);
                 let resume_id = resolve_session_id(session_id, last, &workspace)?;
-                run_interactive(&cli, &config, Some(resume_id), None).await
+                run_interactive(&cli, &config, Some(resume_id), None, None).await
             }
             Commands::Fork { session_id, last } => {
                 let config = load_config_from_cli(&cli)?;
                 let workspace = resolve_workspace(&cli);
                 let new_session_id = fork_session(session_id, last, &workspace)?;
-                run_interactive(&cli, &config, Some(new_session_id), None).await
+                run_interactive(&cli, &config, Some(new_session_id), None, None).await
             }
         };
     }
@@ -805,7 +836,7 @@ async fn main() -> Result<()> {
 
     // Default: Interactive TUI
     // --yolo starts in YOLO mode (shell + trust + auto-approve)
-    run_interactive(&cli, &config, resume_session_id, None).await
+    run_interactive(&cli, &config, resume_session_id, None, None).await
 }
 
 /// Generate shell completions for the given shell
@@ -2955,7 +2986,7 @@ async fn run_pr(
     } else {
         cli.resume.clone()
     };
-    run_interactive(cli, config, resume_session_id, Some(prompt)).await
+    run_interactive(cli, config, resume_session_id, Some(prompt), None).await
 }
 
 /// Return true if `name` resolves to an executable on the current `PATH`.
@@ -3915,6 +3946,7 @@ async fn run_interactive(
     config: &Config,
     resume_session_id: Option<String>,
     initial_input: Option<String>,
+    game_launch: Option<game::GameLaunchOptions>,
 ) -> Result<()> {
     let workspace = cli
         .workspace
@@ -3950,6 +3982,9 @@ async fn run_interactive(
     let use_bracketed_paste = crate::settings::Settings::load()
         .map(|s| s.bracketed_paste)
         .unwrap_or(true);
+    let game_session = game_launch
+        .map(|launch| game::load_game_session(&workspace, launch))
+        .transpose()?;
 
     // Auto-install bundled system skills (e.g. skill-creator) on first launch.
     // Errors are non-fatal: log a warning and continue.
@@ -4005,6 +4040,7 @@ async fn run_interactive(
             yolo: cli.yolo, // YOLO mode auto-approves all tool executions
             resume_session_id,
             initial_input,
+            game_session,
             max_subagents,
         },
     )
@@ -4210,6 +4246,7 @@ async fn run_exec_agent(
         .tag()
         .to_string(),
         workshop: config.workshop.clone(),
+        game_session: None,
     };
 
     let engine_handle = spawn_engine(engine_config, config);
@@ -4240,6 +4277,7 @@ async fn run_exec_agent(
                     .and_then(crate::tui::approval::ApprovalMode::from_config_value)
                     .unwrap_or_default()
             },
+            game_session: None,
         })
         .await?;
 

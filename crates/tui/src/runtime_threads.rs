@@ -1613,6 +1613,7 @@ impl RuntimeThreadManager {
                 } else {
                     crate::tui::approval::ApprovalMode::Suggest
                 },
+                game_session: None,
             })
             .await
             .map_err(|e| anyhow!("Failed to start turn: {e}"))?;
@@ -1957,6 +1958,7 @@ impl RuntimeThreadManager {
             .tag()
             .to_string(),
             workshop: self.config.workshop.clone(),
+            game_session: None,
         };
 
         let engine = spawn_engine(engine_cfg, &self.config);

@@ -13,6 +13,34 @@ This doc covers the role taxonomy. For the orchestration tool surface
 see `prompts/base.md` "Sub-Agent Strategy" and the in-line tool
 descriptions.
 
+## Game TUI Sub-Agents
+
+[`GAME_TUI_FRAMEWORK_SPEC.md`](GAME_TUI_FRAMEWORK_SPEC.md) reuses this runtime
+for game-scoped processors. This is not a second agent system. Game-facing
+helpers wrap the existing sub-agent manager; the implementation should keep
+converging toward driver-declared roles with generated agent packs.
+
+The default serious-game topology is one main game engine session plus five
+manager roles, with only the needed driver-bounded subset active for a given
+scene or turn:
+
+| Game role | Responsibility |
+|---|---|
+| Main Game Engine Session | Talk to the player, coordinate the turn, call driver tools, produce final narration, and commit through native game tools. |
+| State Manager | Propose save-relevant facts such as inventory, flags, quests, location, map position, relationship values, and combat state. |
+| Plot Manager | Propose pacing, route direction, foreshadowing, escalation, and drift guardrails. |
+| NPC Manager A/B/C | Propose NPC dialogue, reactions, emotional state, memories, and character actions. |
+
+Game sub-agents propose; they never own authoritative state. Saves, not old
+sub-agent transcripts, are the reload source of truth. Player mode must give
+game sub-agents scoped context and game-safe tools only; developer mode can
+surface raw summaries and roster details for debugging.
+
+The model-visible game helpers are `game_agent_spawn`, `game_agent_send`,
+`game_agent_wait`, `game_agent_resume`, and `game_agent_list`. Player mode must
+not expose the generic coding-agent `agent_spawn` surface for game
+orchestration.
+
 ## Role taxonomy
 
 The `agent_type` field on `agent_spawn` selects a system-prompt

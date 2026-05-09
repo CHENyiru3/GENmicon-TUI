@@ -12,6 +12,7 @@ pub mod finance;
 
 pub mod fetch_url;
 pub mod fim;
+pub mod game;
 pub mod git;
 pub mod git_history;
 pub mod github;

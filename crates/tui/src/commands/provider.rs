@@ -90,6 +90,7 @@ mod tests {
             yolo: false,
             resume_session_id: None,
             initial_input: None,
+            game_session: None,
         };
         let mut app = App::new(options, &Config::default());
         app.ui_locale = crate::localization::Locale::En;

@@ -39,6 +39,14 @@ impl Engine {
         todo_list: SharedTodoList,
         plan_state: SharedPlanState,
     ) -> ToolRegistryBuilder {
+        if let Some(game_session) = self.config.game_session.as_ref()
+            && !game_session.developer_mode()
+        {
+            return ToolRegistryBuilder::new()
+                .with_game_tools()
+                .with_skill_tools();
+        }
+
         let mut builder = if mode == AppMode::Plan {
             ToolRegistryBuilder::new()
                 .with_read_only_file_tools()
@@ -89,6 +97,10 @@ impl Engine {
         // fail; surfacing it would just waste catalog slots.
         if self.config.memory_enabled {
             builder = builder.with_remember_tool();
+        }
+
+        if self.config.game_session.is_some() {
+            builder = builder.with_game_tools();
         }
 
         builder

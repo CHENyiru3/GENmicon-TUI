@@ -1,0 +1,17 @@
+[game]
+id = "reconciliation-demo"
+title = "Rain at the Overpass"
+version = "0.1.0"
+entry_skill = "reconciliation"
+default_save = "default"
+
+[driver]
+id = "galgame"
+version = "^0.1"
+
+[content]
+index = "content/INDEX.md"
+roots = ["content"]
+
+[saves]
+root = "saves"

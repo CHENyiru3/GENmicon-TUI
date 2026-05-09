@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "topology": "dynamic-main-plus-managers",
+  "agents": [
+    {
+      "slot": "state_manager",
+      "summary": "Track votes, pressure variables, release states, and ending eligibility.",
+      "assigned_files": [
+        "saves/default/STATE.json"
+      ],
+      "last_seen_revision": 0
+    },
+    {
+      "slot": "plot_manager",
+      "summary": "Keep the scene focused on evidence, character, procedure, time, and vote movement.",
+      "assigned_files": [
+        "content/evidence.md",
+        "content/endings.md"
+      ],
+      "last_seen_revision": 0
+    },
+    {
+      "slot": "procedure_manager",
+      "summary": "Watch outside evidence, sealed-fact leakage, coercion, and careless voting.",
+      "assigned_files": [
+        "content/room.md"
+      ],
+      "last_seen_revision": 0
+    },
+    {
+      "slot": "npc_manager_a",
+      "controls": [
+        "juror-03",
+        "juror-08"
+      ],
+      "summary": "Manage high-pressure antagonist and process ally proposals.",
+      "assigned_files": [
+        "content/jurors.md",
+        "skills/npc/juror-03/SKILL.md",
+        "skills/npc/juror-08/SKILL.md"
+      ],
+      "last_seen_revision": 0
+    },
+    {
+      "slot": "npc_manager_b",
+      "controls": [
+        "juror-10",
+        "juror-11"
+      ],
+      "summary": "Manage prejudice exposure and procedure-defense proposals.",
+      "assigned_files": [
+        "content/jurors.md",
+        "skills/npc/juror-10/SKILL.md",
+        "skills/npc/juror-11/SKILL.md"
+      ],
+      "last_seen_revision": 0
+    }
+  ]
+}

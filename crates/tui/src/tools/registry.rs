@@ -506,6 +506,19 @@ impl ToolRegistryBuilder {
         self.with_tool(Arc::new(ValidateDataTool))
     }
 
+    /// Include native Game Console tools.
+    #[must_use]
+    pub fn with_game_tools(self) -> Self {
+        use super::game::{
+            GameCommitTurnTool, GameLookupTool, GameRenderTool, GameRunDriverTool, GameStatusTool,
+        };
+        self.with_tool(Arc::new(GameStatusTool))
+            .with_tool(Arc::new(GameRenderTool))
+            .with_tool(Arc::new(GameLookupTool))
+            .with_tool(Arc::new(GameRunDriverTool))
+            .with_tool(Arc::new(GameCommitTurnTool))
+    }
+
     /// Include retrieval for spilled historical tool results.
     #[must_use]
     pub fn with_tool_result_retrieval_tool(self) -> Self {
@@ -833,6 +846,43 @@ impl ToolRegistryBuilder {
         .with_tool(Arc::new(AgentCloseTool::new(manager.clone())))
         .with_tool(Arc::new(AgentCancelTool::new(manager.clone())))
         .with_tool(Arc::new(AgentListTool::new(manager)))
+    }
+
+    /// Include game-scoped sub-agent helpers. These intentionally use
+    /// `game_agent_*` names and the child runtime narrows to game-safe tools
+    /// when the active context is a non-developer game session.
+    #[must_use]
+    pub fn with_game_subagent_tools(
+        self,
+        manager: super::subagent::SharedSubAgentManager,
+        runtime: super::subagent::SubAgentRuntime,
+    ) -> Self {
+        use super::subagent::{
+            AgentListTool, AgentResumeTool, AgentSendInputTool, AgentSpawnTool, AgentWaitTool,
+        };
+
+        self.with_tool(Arc::new(AgentSpawnTool::with_name(
+            manager.clone(),
+            runtime.clone(),
+            "game_agent_spawn",
+        )))
+        .with_tool(Arc::new(AgentSendInputTool::new(
+            manager.clone(),
+            "game_agent_send",
+        )))
+        .with_tool(Arc::new(AgentWaitTool::new(
+            manager.clone(),
+            "game_agent_wait",
+        )))
+        .with_tool(Arc::new(AgentResumeTool::with_name(
+            manager.clone(),
+            runtime,
+            "game_agent_resume",
+        )))
+        .with_tool(Arc::new(AgentListTool::with_name(
+            manager,
+            "game_agent_list",
+        )))
     }
 
     /// Build the registry with the given context.

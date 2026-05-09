@@ -129,6 +129,7 @@ mod tests {
             yolo,
             resume_session_id: None,
             initial_input: None,
+            game_session: None,
         };
         App::new(options, &Config::default())
     }

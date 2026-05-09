@@ -1,212 +1,387 @@
-# v0.8.6 Takeover Prompt — Fresh DeepSeek V4 Session
+# Takeover Prompt: Game TUI Framework
 
-You are taking over the v0.8.6 sprint for `github.com/Hmbown/DeepSeek-TUI`.
-A previous DeepSeek session kept getting interrupted because the parent session
-grew too large during long-running work. The user has now pruned local saved
-sessions, but that is only temporary relief. Your job is to stabilize the branch
-and fix the product so long-running agent work survives by default.
+## Current Goal
 
-## Prime Directive
+Build a Game TUI system inside DeepSeek TUI.
 
-Do not run this as one long sequential parent session.
+The project direction is no longer "integrate Gen-micom as a native subsystem".
+Gen-micom-style markdown worlds are useful reference material, but the TUI repo
+must own the engineering design. Do not require the external Gen-micom folder,
+do not design around its Python CLI, and do not treat it as the core runtime.
 
-The parent session is the coordinator. Use `agent_spawn` for tool-carrying work,
-use `rlm` for batch classification/synthesis over long issue lists or docs, and
-keep the parent transcript small. If you find yourself reading files one by one
-for the same topic, stop and delegate.
+Target spec file:
 
-## Immediate Emergency
+- `docs/GAME_TUI_FRAMEWORK_SPEC.md`
+- `docs/games/thirteen-angry-man/SPEC.md` for the first serious-game
+  cartridge track
 
-Start with #402:
+## Current Implementation Status
 
-- `#402 P0: make long-running sessions survivable by default (Codex-style compaction + bounded transcript state)`
+The initial framework scaffold is now present:
 
-This is now the top priority because it caused the interrupted handoff loop.
-The issue body names the exact gap versus `/Volumes/VIXinSSD/codex-main`:
+- `crates/game` is a pure Rust runtime crate for manifests, driver resolution,
+  saves, lookup, rendering, Starlark driver functions, and agent packs.
+- `deepseek play`, `/play`, `/game ...`, native `game_*` tools, and
+  player-mode game tool-profile wiring exist in the TUI.
+- `examples/games/reconciliation-demo` is the minimal galgame proof fixture.
+- `examples/games/thirteen-angry-man` is the first serious-game cartridge
+  scaffold, using the bundled `deliberation-drama` driver.
+- Save-locked driver versions must resolve exactly; missing or mismatched
+  versions produce a load notice rather than silently continuing as a loaded
+  session.
 
-- DeepSeek TUI keeps unbounded `api_messages` and visible `history`.
-- `auto_compact = false` and the capacity controller is off by default.
-- saved sessions serialize full `messages: Vec<Message>` snapshots.
-- the important mocked engine tests for compaction/subagents/parallel execution
-  are still ignored because the engine takes a concrete `DeepSeekClient`.
-- Codex has runtime pre/mid-turn compaction, replacement history, persisted
-  compacted rollout items, and sanitized/last-N subagent fork behavior.
+## Source Of Truth And Sync Rules
 
-Do not treat this as docs or prompt tuning. Implement runtime guardrails.
+`docs/GAME_TUI_FRAMEWORK_SPEC.md` is the authoritative planning spec. This
+takeover prompt is a compact operator handoff for a fresh implementation
+session. If the prompt and spec disagree, update this prompt to match the spec
+rather than widening the design here.
 
-## Current Branch State To Verify
+Keep planned and shipped surfaces clearly separated:
 
-Branch should be `feat/v0.8.6`. The prior interrupted session had dirty work.
-Verify before trusting any claim:
+- related docs should carry short pointers and invariants, not a second copy of
+  the full blueprint
+- `docs/ARCHITECTURE.md` should say where the Game Console scaffold attaches to the
+  current runtime
+- `docs/TOOL_SURFACE.md` should describe the active `game_*` profile without
+  implying persistent `[game]` config is shipped
+- `docs/SUBAGENTS.md` should describe game-scoped sub-agents as wrappers around
+  the current sub-agent runtime, not a second agent system
+- `docs/CONFIGURATION.md` should not present `[game]` keys as active until the
+  config loader and UI use them
+- `docs/MODES.md` should keep Game Console as a presentation/tool profile, not a
+  fourth `AppMode`
 
-1. `git status --short --branch`
-2. `cargo check --workspace --all-targets --locked`
-3. `cargo test --workspace --all-features --locked` if check passes
-4. read `AGENTS.md`, `V086_BRIEF.md`, `docs/ARCHITECTURE.md`, and issue #402
+## Product Direction
 
-Known partial work from the interrupted session:
+`deepseek play` should feel like opening an AI-era terminal-native game console
+or game computer:
 
-- Goal mode command dispatch (`/goal`) — inspect `crates/tui/src/commands/goal.rs`
-- File tree pane — inspect `crates/tui/src/tui/file_tree.rs`
-- user-defined command plumbing — inspect `crates/tui/src/commands/user_commands.rs`
-- localization/sidebar/rendering changes across `crates/tui/src/*`
+- choose or resume a local game
+- read a clear player-facing game view
+- type natural player actions
+- let the main game engine session resolve the turn with game rules, driver
+  tools, and scoped sub-agents
+- persist progress through native game tools
+- resume later from file-backed save state
 
-Do not overwrite unrelated dirty files. Work with the existing changes.
+The first milestone is a playable loop, not authoring tooling.
 
-## Updated v0.8.6 Issue Set
+## Design Center
 
-The original brief said 23 issues, but the live v0.8.6 label now includes more.
-Refresh live state with:
+Game TUI is a TUI-owned framework with four engineering pieces:
 
-```bash
-gh issue list --label v0.8.6 --state open --limit 100 --json number,title,body,labels
+1. **TUI game console**
+   - The existing DeepSeek TUI is the game console/computer.
+   - Reuse the current app, engine, skill discovery, slash commands, tool
+     registry, session persistence, sub-agent runtime, and ratatui surfaces.
+   - Add a player-facing presentation profile and a restricted game tool
+     profile.
+
+2. **Game runtime core**
+   - Required pure Rust crate at `crates/game`.
+   - Loads game/driver manifests and saves, validates state, executes
+     constrained deterministic scripts, renders structured panels, performs
+     bounded lookup, and commits turns atomically.
+   - Must have no ratatui, TUI, LLM, shell, network, Python, or external
+     Gen-micom runtime dependency.
+
+3. **Game Driver**
+   - Reusable genre runtime for galgame, RPG, mystery, simulation, etc.
+   - Owns turn-loop policy, genre skills, Starlark deterministic scripts,
+     save/schema extensions, render templates, and sub-agent role templates.
+   - Installed globally by version and selected by each game manifest.
+
+4. **Game package**
+   - Local swappable cartridge with manifest, markdown content, world/plot
+     design, character definitions, optional skills, NPC skills, and saves.
+   - The package is data, not executable code.
+
+Hardware metaphor for product direction:
+
+- CPU = LLM/API/model ability.
+- GPU = model-driven terminal rendering and ASCII art.
+- Memory = context, summaries, compaction, save files, and reload stability.
+
+Use this metaphor to explain the product, not as mandatory Rust API naming.
+
+## Relationship To Skills
+
+The current TUI skill system is relevant and should be reused.
+
+Existing behavior:
+
+- skills are discovered from `SKILL.md`
+- skills are listed in the system prompt
+- the model can load a skill body with `load_skill`
+- `/skill <name>` injects a skill into the next normal user turn
+
+Game TUI should extend this idea for games:
+
+- a game driver can include persistent genre skills
+- a game package can include `skills/<name>/SKILL.md`
+- the game manifest declares a persistent entry skill for game rules, voice,
+  parser policy, and genre conventions
+- important NPCs can have `skills/npc/<npc-id>/SKILL.md`
+- saves can contain generated NPC skill overlays that evolve through play
+- optional skills can still be loaded for specific game systems
+- skills provide instructions only; they are not the source of save truth
+- native game tools own validation, state lookup, rendering, and persistence
+- manifest-declared game and driver skills auto-load for the active game session
+- auto-loaded game skills cannot expand the player tool profile, escape game or
+  driver roots, override save authority, or change approval/sandbox policy
+
+## Sub-Agent Runtime
+
+Use current TUI sub-agents as scoped game processors.
+
+Baseline serious-game topology:
+
+1. **Main Game Engine Session**
+   - Talks to the player.
+   - Coordinates the turn.
+   - Calls driver tools and sub-agents.
+   - Produces the final player-facing response.
+   - Commits authoritative state through native game tools.
+
+2. **State Manager Sub-Agent**
+   - Tracks inventory, flags, quests, location, map position, relationship
+     values, combat state, and other save-relevant facts.
+
+3. **Plot Manager Sub-Agent**
+   - Tracks designer intent, route direction, pacing, foreshadowing, escalation,
+     and whether the story is drifting.
+
+4. **NPC Manager Sub-Agent A/B/C**
+   - Each controls one or several NPCs.
+   - Generates dialogue, reactions, emotional state, memories, and proposed
+     character actions.
+
+Sub-agent rules:
+
+- sub-agents propose; they do not commit authoritative state
+- the main session is the only final narrator
+- save files are the source of truth
+- sub-agents receive scoped agent packs, not the whole game
+- player-mode sub-agents must use game-safe tools, not full coding tools
+- game sub-agents are accessed through `game_agent_*` helpers, not generic
+  `agent_spawn` in player mode
+- reload reconstructs sub-agents from save summaries and NPC skills
+
+The driver declares allowed roles, default roles, and maximum active count. The
+main game engine session activates only the needed driver-bounded subset per
+scene and turn; V1 must not force all five manager roles to run every turn.
+
+Agent packs should contain only:
+
+```text
+role.md
+output_contract.md
+allowed_files.md
+current_scene.md
+relevant_save_slice.json
+recent_turns.md
+assigned_skills/
+callable_driver_functions.md
 ```
 
-New or especially relevant additions:
+Generated NPC skills should update after critical committed events and at a
+periodic checkpoint, defaulting to every five committed turns.
 
-- `#402` P0 long-running session survivability: runtime compaction, bounded transcript/session persistence.
-- `#401` prune overly defensive assertions: remove brittle prompt-substring/snapshot-style tests.
-- `#400` chat/sidebar text bleed-through: timestamp fragments persist across cells when scrolling.
-- `#399` lag/freeze audit: sync git on UI thread, unbounded history Vec, file-tree blocking walk.
-- `#398` codex-mcp parity: agent-style MCP server tool plus `deepseek mcp add/list/get/remove`.
+## File-Backed Save Principle
 
-Existing high-priority v0.8.6 issues still include:
+Game progress must not depend on the chat transcript.
 
-- `#397` Goal mode
-- `#396` per-turn cache hit chip
-- `#395` cycle-boundary visualization
-- `#394` file-tree pane
-- `#393` share session URL
-- `#392` `/model auto`
-- `#391` user-defined slash commands
-- `#390` profile hot-switch
-- `#389` inline LSP diagnostics
-- `#388` crash-recovery prompt
-- `#387` self-update
-- `#386` `/init`
-- `#385` `/diff`
-- `#384` `/undo`
-- `#383` `/edit`
-- `#382` collapse Steer/Queue/Immediate
-- `#380` inline diff highlighting
-- `#379` smart clipboard
-- `#378` docs polish
-- `#377` shrink App state
-- `#376` native-copy escape
-- `#375` right-click context menu
-- `#374` clickable file:line
-- `#373` Tasks panel ignores shell jobs
+The save files are authoritative. The transcript is useful for display,
+debugging, and recovery context, but never the source of truth for game state.
 
-## First-Hour Execution Plan
+Planned save shape:
 
-Do this as a fanout, not a serial survey.
-
-1. Parent: create a checklist with lanes below, then run one batched read/status
-   turn: `git status`, `gh issue list --label v0.8.6`, focused `rg` for
-   compaction/session/history/capacity, and the initial cargo check.
-
-2. Spawn sub-agent A: #402 runtime/session survivability.
-   Ownership: `crates/tui/src/core/engine.rs`, `crates/tui/src/compaction.rs`,
-   `crates/tui/src/session_manager.rs`, `crates/tui/src/tui/app.rs`,
-   `crates/tui/tests/integration_mock_llm.rs`, and relevant config docs.
-   Task: design and implement the smallest runtime guardrail slice that bounds
-   parent model history/session persistence and unblocks real integration tests.
-
-3. Spawn sub-agent B: current dirty-tree compile repair.
-   Ownership: partial v0.8.6 files from the interrupted session:
-   `commands/goal.rs`, `commands/user_commands.rs`, `tui/file_tree.rs`,
-   `commands/mod.rs`, `localization.rs`, `tui/sidebar.rs`, `tui/ui.rs`.
-   Task: make the branch compile without widening scope.
-
-4. Spawn sub-agent C: UI performance/bleed-through lane (#399/#400/#394).
-   Ownership: transcript rendering/cache, sidebar rendering, file-tree traversal.
-   Task: fix the regression and identify any blocking synchronous UI work.
-
-5. Spawn sub-agent D: issue/test hygiene lane (#401 plus ignored mock tests).
-   Ownership: brittle tests, prompt snapshot tests, and ignored integration tests.
-   Task: remove brittle assertions where appropriate and convert #402 acceptance
-   criteria into real tests.
-
-6. Spawn sub-agent E only if needed: MCP parity (#398) or command surface
-   follow-through (#391/#397). Keep it separate from #402 so the P0 fix is not
-   tangled with feature work.
-
-## RLM Usage
-
-Use `rlm` when the input is large enough that pasting/reading it in the parent
-would bloat the session. Good RLM tasks here:
-
-- classify all live `v0.8.6` issue bodies into independent implementation lanes;
-- compare #402 against Codex files by giving RLM extracted snippets from both
-  repos and asking for a bounded acceptance checklist;
-- batch-review a long test list for brittle assertions related to #401;
-- summarize long cargo/clippy output into file-owned fix clusters.
-
-Inside RLM, use `llm_query_batched()` for independent classifications and
-`rlm_query()` only for recursive critique/decomposition. The parent should get
-the final synthesis, not every intermediate chunk.
-
-## Session Survival Rules
-
-- Keep at most 5 sub-agents running.
-- After spawning agents, keep doing non-overlapping local coordination work.
-- Use `agent_wait` only when blocked on results.
-- Use `agent_result` for completed agents and summarize results into the parent.
-- Suggest `/compact` at 60% context, but do not rely on that as the product fix.
-- If the parent reaches 3 sequential turns on the same topic, spawn or RLM it.
-- Do not paste full logs into the parent. Store logs as artifacts or ask RLM to
-  summarize them.
-
-## PR Workflow
-
-Use GitHub PRs as an extra review surface. Do not let a giant local branch pile
-up without outside checks.
-
-- Prefer small PRs by issue or tightly related lane: #402 can be its own PR,
-  compile-repair can be its own PR, UI performance/regression fixes can be their
-  own PR, and command-surface features can be separate.
-- Push work branches and open PRs early once each slice compiles and has focused
-  tests. Include `Closes #...` only when the PR actually satisfies the issue.
-- Let CI and any GitHub AI/code-review agents inspect the code. Treat review
-  comments as real work: address them with follow-up commits rather than
-  hand-waving them away.
-- When a PR comes back clean, merge it into the target branch and continue from
-  the updated branch. When it comes back with requested fixes, make the fixes,
-  rerun the relevant gates, and wait for the updated checks before merging.
-- Keep the parent session tracking PR state with `gh pr view`, `gh pr checks`,
-  and `gh issue view`; do not manually close issues unless acceptance is
-  verified and the merge did not close them automatically.
-
-## Verification Gates
-
-Before claiming anything is done:
-
-```bash
-cargo fmt --all -- --check
-cargo check --workspace --all-targets --locked
-cargo test --workspace --all-features --locked
-cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+```text
+<game-root>/
+  game.toml
+  GAME.md
+  skills/
+    dm/SKILL.md
+    npc/
+      <npc-id>/SKILL.md
+  content/
+  saves/
+    <save-id>/
+      STATE.json
+      TURN_LOG.jsonl
+      SUMMARY.md
+      AGENTS.json
+      skills/
+        npc/
+          <npc-id>/SKILL.md
 ```
 
-For #402 specifically, also add or enable focused tests proving:
+Game drivers install globally:
 
-- compaction/cycle guardrail runs before dangerous context growth;
-- live `api_messages` or equivalent model history is bounded after compaction;
-- visible transcript/session persistence is bounded or virtualized;
-- sub-agent result ingestion into the parent is summarized/bounded;
-- child fork history can use sanitized last-N behavior;
-- session save/checkpoint does not rewrite arbitrary huge full transcripts.
+```text
+~/.deepseek/game-drivers/
+  <driver-id>/
+    <version>/
+      driver.toml
+      skills/
+      scripts/
+        *.star
+      agent_templates/
+      render_templates/
+```
 
-## Final Report Format
+Games bind drivers by semver in `game.toml`, and saves record the concrete
+resolved driver version. Existing saves must reload with that exact concrete
+driver version; V1 has no migration path, so unavailable or mismatched driver
+versions fail clearly without rewriting the save. Normal gameplay must not
+depend on Python or external shell scripts; deterministic game math belongs in
+constrained Starlark scripts executed by the Rust runtime.
 
-Use these headings:
+`STATE.json` and `TURN_LOG.jsonl` are the only atomic truth. `SUMMARY.md`,
+`AGENTS.json`, NPC skill overlays, and render caches are post-commit derived
+artifacts and must be rebuildable.
 
-- Implemented
-- Verified
-- Issues safe to close
-- Issues still open and why
-- Commands run
-- Residual risks
+## Planned Public Surface
 
-Be explicit about what is local-only, what is committed, what is pushed, and what
-is merely planned. Do not close issues unless acceptance criteria are verified.
+CLI:
+
+```text
+deepseek play [game-or-path] [--save <id>] [--dev]
+```
+
+Slash commands:
+
+```text
+/play [game-or-path]
+/game status
+/game render
+/game saves
+/game dev
+/game exit
+```
+
+Config:
+
+```toml
+[game]
+roots = []
+default_game = ""
+default_save = ""
+developer_mode = false
+
+[game.drivers]
+roots = ["~/.deepseek/game-drivers"]
+```
+
+Native game tools:
+
+- `game_status`
+- `game_render`
+- `game_lookup`
+- `game_run_driver`
+- `game_commit_turn`
+
+`game_lookup` returns bounded content excerpts from declared content roots only
+(default 16 KiB, hard cap 32 KiB). `game_run_driver` calls only driver-declared
+Starlark functions and cannot mutate saves or access files, shell, or network.
+`game_commit_turn` requires `expected_revision`, `player_input`, `resolution`,
+and an RFC 7396 JSON Merge Patch as `state_patch`; the runtime generates
+`turn_id`, `revision_after`, and `created_at`.
+
+Game-scoped sub-agent helpers are `game_agent_spawn`, `game_agent_send`,
+`game_agent_wait`, `game_agent_resume`, and `game_agent_list`. They wrap the
+existing sub-agent runtime for declared driver roles only and must not expose
+generic coding-agent tools in player mode.
+
+Do not add a model-visible `game_parallel` wrapper in V1. Rely on native
+parallel tool-call execution when available.
+
+Player mode should expose only game-safe tools plus required skill-loading
+support. Developer mode can expose validation, raw paths, raw state, and normal
+inspection tools.
+
+`[game]` config is planned for user/global and project config. Project config
+can provide roots and defaults, but cannot persistently enable developer mode;
+only user config can honor `game.developer_mode = true`.
+
+## Implementation Guidance
+
+Keep the first implementation slice narrow:
+
+1. Add the markdown spec first.
+2. Add required pure Rust crate `crates/game`, with no ratatui, TUI, LLM,
+   shell, network, Python, or external runtime dependency.
+3. Add driver manifest loading and version resolution before genre-specific
+   gameplay logic.
+4. Add a constrained Starlark execution boundary for deterministic driver
+   scripts.
+5. Wire the existing TUI to start in a Game Console presentation when launched
+   with `deepseek play`.
+6. Add `GameSession` state to the app, but do not add a new `AppMode::Game`.
+7. Add a restricted tool profile for player mode.
+8. Add game-scoped `game_agent_*` orchestration for the dynamic State, Plot, and
+   NPC manager topology.
+9. Persist turns only through `game_commit_turn` using JSON Merge Patch.
+10. Add the V1 galgame reconciliation demo fixture.
+11. Rebuild sub-agents from save summaries and NPC skills on reload.
+
+Start code discovery from the current repo seams:
+
+- `crates/cli` and `crates/tui/src/main.rs` for `deepseek play` dispatch.
+- `crates/tui/src/commands/` for `/play` and `/game ...`.
+- `crates/tui/src/tui/app.rs`, `tui/ui.rs`, and `tui/mod.rs` for Game Console
+  presentation and game session state.
+- `crates/tui/src/core/engine/tool_setup.rs` and
+  `crates/tui/src/tools/registry.rs` for the restricted player tool profile.
+- `crates/tui/src/skills/`, `skill_state.rs`, and `tools/skill.rs` for game and
+  driver skill loading.
+- `crates/tui/src/tools/subagent/` and `tui/subagent_routing.rs` for scoped game
+  sub-agent wrappers.
+
+## Acceptance Criteria For V1
+
+- `deepseek play` opens the existing TUI directly into a player-facing game
+  console.
+- A local game package can be loaded without any external repo dependency.
+- A game can bind to a globally installed, versioned Game Driver.
+- A save can be rendered, played, committed, and resumed after restart.
+- The player does not see coding-agent controls by default.
+- Game skills can provide persistent instructions for rules and voice.
+- Default serious games can use one main game engine session plus five manager
+  roles: State, Plot, and three NPC managers; only the needed driver-bounded
+  subset has to be active each turn.
+- Sub-agents can propose state/plot/dialogue, but only native game tools commit.
+- Save files remain the source of truth.
+- `game_run_driver` handles deterministic declared Starlark calculations.
+- `game_commit_turn` uses RFC 7396 JSON Merge Patch and exact revision checks.
+- One local galgame reconciliation demo can reach success and failure endings.
+- No Python subprocess is required for normal play.
+
+## Verification Targets
+
+Future implementation should include:
+
+- crate tests for manifest load, save load, validation, render data, lookup,
+  exact driver-version reload, Starlark script sandboxing, `game_run_driver`,
+  JSON Merge Patch commit, generated commit fields, lookup caps, and revision
+  conflicts
+- TUI command tests for `deepseek play [game-or-path] [--save <id>] [--dev]`,
+  `/play`, and `/game`
+- tool registry tests proving player mode exposes only game-safe tools,
+  excludes shell/file/git/code tools, and does not expose `game_parallel`
+- sub-agent tests proving `game_agent_*` helpers receive scoped packs and cannot
+  access full coding tools in player mode
+- mock LLM test proving a player action leads to `game_commit_turn` and a
+  resumable save with reconstructable sub-agent context
+- demo fixture test proving the galgame scene can load, play, save, resume, and
+  reach both endings
+- full workspace check with `cargo test --workspace --all-features`
+
+## Constraints
+
+- Stable Rust only.
+- No new terminal app or separate event loop.
+- Do not depend on the external Gen-micom repository.
+- Treat external markdown game examples as data or inspiration, not authority.
+- Keep normal play file-backed and local-first.

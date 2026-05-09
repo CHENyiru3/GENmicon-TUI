@@ -51,6 +51,113 @@ make sure the workspace's declared `rust-version` is enough to compile.
 ### Documentation
 See README.md for project overview, docs/ARCHITECTURE.md for internals.
 
+### Game TUI planning docs
+
+- `docs/GAME_TUI_FRAMEWORK_SPEC.md` is the authoritative planning spec for the
+  `deepseek play` Game TUI framework.
+- `TAKEOVER_PROMPT.md` is only a compact handoff prompt for that effort; keep it
+  synchronized with the spec, not the other way around.
+- Game TUI is a TUI-owned framework. Do not reintroduce an external
+  Gen-micom runtime dependency, Python CLI dependency, separate terminal app, or
+  separate event loop.
+- V1 requires a pure Rust `crates/game` runtime crate with no TUI/ratatui,
+  LLM, shell, network, Python, or external runtime dependency.
+- Game commands/tools/config are shipped behavior only when code,
+  localization/help, tests, and the relevant docs are updated together.
+
+## Active Code Map
+
+This workspace is a multi-crate Rust project, but the live end-user runtime is
+still primarily in `crates/tui`. The extracted crates under `crates/{core,
+tools,config,state,...}` are important architecture boundaries and are used by
+the `deepseek` facade/app-server work, but do not assume they are the only
+source of truth yet. When changing behavior visible in the terminal app, inspect
+`crates/tui` first.
+
+### Entry points and package boundaries
+
+- **Canonical command**: `deepseek` from `crates/cli` is the supported user
+  entry point. It dispatches/passes through interactive and compatibility flows
+  to the companion `deepseek-tui` binary.
+- **TUI runtime binary**: `crates/tui/src/main.rs` owns the companion CLI,
+  feature toggles, subcommands, config load, onboarding handoff, one-shot
+  execution, review/apply/eval modes, server startup, and TUI launch.
+- **UI runtime**: `crates/tui/src/tui/` contains the ratatui app state,
+  rendering, input handling, transcript, slash menu, palettes, pickers,
+  approvals, job routing, and views. Start with `tui/app.rs`, `tui/ui.rs`, and
+  `tui/mod.rs`.
+- **Engine runtime**: `crates/tui/src/core/` contains the event-driven agent
+  engine (`engine.rs`), ops/events/session/turn types, tool parsing, capacity
+  guardrails, coherence state, and the turn loop helpers in
+  `core/engine/*.rs`.
+- **Model/API client**: `crates/tui/src/client.rs`, `client/chat.rs`,
+  `llm_client/`, and `models.rs` own the OpenAI-compatible Chat Completions
+  request/streaming path, DeepSeek reasoning-content replay, usage parsing,
+  retry/status behavior, and mock LLM test boundary.
+- **Facade/extracted crates**: `crates/cli`, `agent`, `app-server`, `config`,
+  `core`, `execpolicy`, `hooks`, `mcp`, `protocol`, `secrets`, `state`,
+  `tools`, and `tui-core` are the split workspace architecture. Check whether a
+  feature is already duplicated or still TUI-only before moving logic.
+
+### Feature edit guide
+
+- **Modes, approvals, and sandboxing**: mode state starts in
+  `tui/app.rs::AppMode`; per-turn tool/sandbox selection is in
+  `core/engine/tool_setup.rs`; approval handling is in
+  `core/engine/approval.rs`, `tui/approval.rs`, `execpolicy/`, and
+  `sandbox/`.
+- **Tool surface**: built-in tools live in `crates/tui/src/tools/`. Registry
+  composition is in `tools/registry.rs`; per-mode tool exposure is in
+  `core/engine/tool_setup.rs`; common schemas/results/context are in
+  `tools/spec.rs`. Keep tool names stable unless docs, prompts, tests, and
+  compatibility aliases are updated together.
+- **Slash commands and command palette**: command metadata and dispatch live in
+  `commands/mod.rs`, with subcommands split across `commands/*.rs`. UI actions
+  usually flow through `AppAction` in `tui/app.rs` and are handled in
+  `tui/ui.rs` or related routing modules.
+- **Sub-agents**: model-visible tools are implemented in `tools/subagent/` and
+  registered from `tools/registry.rs`; UI routing is in `tui/subagent_routing.rs`;
+  docs are in `docs/SUBAGENTS.md`. The supported surface is `agent_spawn` plus
+  wait/result/cancel/list/send/resume/assign helpers.
+- **RLM / recursive analysis**: `tools/rlm.rs` exposes the model-visible tool;
+  `rlm/` and `repl/` implement the sandboxed Python REPL and
+  `llm_query(_batched)` helpers. Those helper names are available inside the
+  REPL, not as separate model-visible tools.
+- **Runtime API, tasks, and automations**: `runtime_api.rs` exposes local
+  HTTP/SSE routes; `runtime_threads.rs` owns durable thread/turn/item event
+  records; `task_manager.rs` owns background task queues, gates, artifacts, and
+  PR attempts; `automation_manager.rs` schedules recurring runs.
+- **Persistence and recovery**: `session_manager.rs` handles saved sessions and
+  checkpoints; `snapshot/` handles side-git pre/post-turn workspace snapshots
+  for `/restore` and `revert_turn`; `schema_migration.rs` and schema-version
+  checks protect persisted state.
+- **MCP, skills, hooks, memory**: `mcp.rs` and `mcp_server.rs` manage MCP
+  clients/server mode; `skills/`, `skill_state.rs`, and `tools/skill.rs`
+  manage skill discovery/activation; `hooks.rs` plus `commands/hooks.rs` own
+  lifecycle hooks; `memory.rs` and `tools/remember.rs` own persistent user
+  memory.
+- **Provider/model/config surfaces**: `config.rs`, `settings.rs`,
+  `config_ui.rs`, `commands/config.rs`, `commands/provider.rs`, `models.rs`,
+  `pricing.rs`, and `auto_reasoning.rs` are the first stops for provider,
+  model picker, routing, cost, reasoning-effort, and config UI changes.
+- **Localization and UI text**: `localization.rs`, `tui/ui_text.rs`, and the
+  command `MessageId` entries must stay in sync when adding user-facing copy.
+- **LSP diagnostics**: `lsp/` owns language detection, stdio JSON-RPC clients,
+  and diagnostic rendering; engine integration is in
+  `core/engine/lsp_hooks.rs`.
+- **Game TUI framework**: follow `docs/GAME_TUI_FRAMEWORK_SPEC.md`.
+  Start at `crates/cli`/`crates/tui/src/main.rs` for `deepseek play`,
+  `commands/` for `/play` and `/game`, `tui/app.rs` and `tui/ui.rs` for the
+  player-facing presentation, `core/engine/tool_setup.rs` and
+  `tools/registry.rs` for the restricted game-safe tool profile, `crates/game`
+  for manifests/saves/lookup/render/Starlark/commit behavior, and
+  `tools/subagent/` plus `tui/subagent_routing.rs` for scoped
+  `game_agent_*` helpers. V1 must use `GameSession` rather than adding
+  `AppMode::Game`.
+- **Tests and fixtures**: crate unit tests live beside modules; TUI integration
+  tests and PTY/mock-LLM harnesses are under `crates/tui/tests/`. Prefer the
+  mock `LlmClient` boundary over HTTP mocking for runtime behavior.
+
 ## DeepSeek-Specific Notes
 
 - **Thinking Tokens**: DeepSeek models output thinking blocks (`ContentBlock::Thinking`) before final answers. The TUI streams and displays these with visual distinction.

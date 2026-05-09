@@ -9,6 +9,7 @@ mod config;
 mod core;
 mod cycle;
 mod debug;
+mod game;
 mod goal;
 mod hooks;
 mod init;
@@ -176,6 +177,18 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &[],
         usage: "/provider [name]",
         description_id: MessageId::CmdProviderDescription,
+    },
+    CommandInfo {
+        name: "play",
+        aliases: &[],
+        usage: "/play [game-or-path] [--save <id>] [--dev]",
+        description_id: MessageId::CmdPlayDescription,
+    },
+    CommandInfo {
+        name: "game",
+        aliases: &[],
+        usage: "/game [status|render|saves|dev [on|off]|exit]",
+        description_id: MessageId::CmdGameDescription,
     },
     CommandInfo {
         name: "queue",
@@ -515,6 +528,8 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "model" => core::model(app, arg),
         "models" => core::models(app),
         "provider" => provider::provider(app, arg),
+        "play" => game::play(app, arg),
+        "game" => game::game(app, arg),
         "queue" | "queued" => queue::queue(app, arg),
         "stash" | "park" => stash::stash(app, arg),
         "hooks" | "hook" => hooks::hooks(app, arg),
@@ -858,6 +873,7 @@ mod tests {
             yolo: false,
             resume_session_id: None,
             initial_input: None,
+            game_session: None,
         };
         App::new(options, &Config::default())
     }
@@ -1005,6 +1021,7 @@ mod tests {
             yolo: false,
             resume_session_id: None,
             initial_input: None,
+            game_session: None,
         };
         let app = App::new(options, &Config::default());
         (app, tmpdir)

@@ -1219,6 +1219,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "deepseek-game"
+version = "0.8.23"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "starlark",
+ "thiserror 2.0.17",
+ "toml 0.9.11+spec-1.1.0",
+]
+
+[[package]]
 name = "deepseek-hooks"
 version = "0.8.23"
 dependencies = [
@@ -1302,6 +1314,7 @@ dependencies = [
  "clap_complete",
  "colored",
  "crossterm 0.28.1",
+ "deepseek-game",
  "deepseek-secrets",
  "deepseek-tools",
  "dirs",

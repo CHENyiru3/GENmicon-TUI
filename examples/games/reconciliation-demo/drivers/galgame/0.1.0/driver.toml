@@ -1,0 +1,23 @@
+[driver]
+id = "galgame"
+title = "Minimal Galgame Driver"
+version = "0.1.0"
+
+[runtime]
+script_engine = "starlark"
+default_topology = "dynamic-main-plus-managers"
+
+[skills]
+entry = "skills/galgame/SKILL.md"
+
+[scripts]
+root = "scripts"
+
+[subagents]
+default_roles = ["state", "plot", "dialogue"]
+max_active = 3
+
+[functions.score_action]
+script = "scripts/affection.star"
+function = "score_action"
+mutates = false

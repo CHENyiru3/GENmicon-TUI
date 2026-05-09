@@ -138,6 +138,10 @@ pub struct ToolContext {
     pub workshop_vars: Option<
         std::sync::Arc<tokio::sync::Mutex<crate::tools::large_output_router::WorkshopVariables>>,
     >,
+
+    /// Active Game Console session. Present only when the UI is running a
+    /// loaded game; game tools fail closed when this is absent.
+    pub game_session: Option<crate::game::GameSession>,
 }
 
 impl ToolContext {
@@ -169,6 +173,7 @@ impl ToolContext {
             lsp_manager: None,
             large_output_router: None,
             workshop_vars: None,
+            game_session: None,
         }
     }
 
@@ -203,6 +208,7 @@ impl ToolContext {
             lsp_manager: None,
             large_output_router: None,
             workshop_vars: None,
+            game_session: None,
         }
     }
 
@@ -237,6 +243,7 @@ impl ToolContext {
             lsp_manager: None,
             large_output_router: None,
             workshop_vars: None,
+            game_session: None,
         }
     }
 
@@ -479,6 +486,13 @@ impl ToolContext {
     ) -> Self {
         self.large_output_router = Some(router);
         self.workshop_vars = Some(vars);
+        self
+    }
+
+    /// Attach an active Game Console session to the tool context.
+    #[must_use]
+    pub fn with_game_session(mut self, game_session: Option<crate::game::GameSession>) -> Self {
+        self.game_session = game_session;
         self
     }
 }

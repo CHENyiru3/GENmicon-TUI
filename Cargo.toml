@@ -6,6 +6,7 @@ members = [
     "crates/config",
     "crates/core",
     "crates/execpolicy",
+    "crates/game",
     "crates/hooks",
     "crates/mcp",
     "crates/protocol",

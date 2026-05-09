@@ -15,6 +15,34 @@ chosen over the available shell equivalent. Companion to `crates/tui/src/prompts
   for the same backing operation are a model trap — the LLM will alternate
   between them and the cache hit rate suffers.
 
+## Game TUI Tool Profile
+
+Game TUI tools are specified in
+[`GAME_TUI_FRAMEWORK_SPEC.md`](GAME_TUI_FRAMEWORK_SPEC.md). The initial
+implementation registers the native `game_*` tools when an active
+`GameSession` exists. Player mode uses a whitelist:
+
+| Planned tool | Purpose | Mutates |
+|---|---|---|
+| `game_status` | Validate the active game/save and return warnings or errors. | No |
+| `game_render` | Return structured panel data from the current save. | No |
+| `game_lookup` | Retrieve bounded content under the game package root. | No |
+| `game_run_driver` | Run a declared deterministic driver function. | No |
+| `game_commit_turn` | Append one turn and update save state atomically. | Yes |
+
+Player mode may also expose skill-loading support and game-scoped sub-agent
+helpers named `game_agent_spawn`, `game_agent_send`, `game_agent_wait`,
+`game_agent_resume`, and `game_agent_list`. Those helpers must remain
+game-scoped and should converge on declared driver roles and generated agent
+packs. V1 should not add a model-visible `game_parallel` wrapper; safe
+parallelism is an engine behavior, not an advertised meta-tool.
+
+Shell, generic file write/edit tools, git tools, broad workspace inspection,
+code execution, and network tools stay out of player mode unless a later game
+feature explicitly adds and documents a safe exception. Developer mode can
+expose raw paths, raw state, validation details, and normal inspection tools,
+but it must be visually distinct from player mode.
+
 ## Current surface (v0.7.5)
 
 ### File operations

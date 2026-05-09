@@ -1,0 +1,39 @@
+[driver]
+id = "deliberation-drama"
+title = "Deliberation Drama Driver"
+version = "0.1.0"
+
+[runtime]
+script_engine = "starlark"
+default_topology = "dynamic-main-plus-managers"
+
+[skills]
+entry = "skills/driver/SKILL.md"
+
+[scripts]
+root = "scripts"
+
+[subagents]
+default_roles = ["state_manager", "plot_manager", "procedure_manager", "npc_manager_a", "npc_manager_b"]
+max_active = 5
+
+[subagents.templates]
+state_manager = "agent_templates/state_manager.md"
+plot_manager = "agent_templates/plot_manager.md"
+procedure_manager = "agent_templates/procedure_manager.md"
+npc_manager = "agent_templates/npc_manager.md"
+
+[functions.advance_room]
+script = "scripts/deliberation.star"
+function = "advance_room"
+mutates = false
+
+[functions.evaluate_vote_change]
+script = "scripts/deliberation.star"
+function = "evaluate_vote_change"
+mutates = false
+
+[functions.detect_procedure_risk]
+script = "scripts/deliberation.star"
+function = "detect_procedure_risk"
+mutates = false

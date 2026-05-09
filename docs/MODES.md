@@ -18,6 +18,14 @@ Press `Shift+Tab` to cycle reasoning effort.
 
 All three modes have access to the `rlm` tool. Inside its Python REPL, `llm_query_batched` fans out 1–16 cheap parallel child calls pinned to `deepseek-v4-flash`. The model reaches for it when work is decomposable.
 
+### Game Console Presentation
+
+Game TUI is a Game Console presentation and restricted game-safe tool profile
+inside the existing TUI. It is not a fourth visible Plan/Agent/YOLO mode, and
+V1 must not add `AppMode::Game`; attach game state through `GameSession` and a
+presentation/tool profile. See
+[`GAME_TUI_FRAMEWORK_SPEC.md`](GAME_TUI_FRAMEWORK_SPEC.md).
+
 ## Compatibility Notes
 
 - `/normal` is a hidden compatibility alias that switches to `Agent`.

@@ -1,0 +1,254 @@
+{
+  "schema_version": 1,
+  "revision": 0,
+  "driver": {
+    "id": "deliberation-drama",
+    "version": "0.1.0"
+  },
+  "scene": {
+    "time": "late afternoon",
+    "location": "jury room",
+    "summary": "The first ballot has exposed one not-guilty vote against an impatient guilty majority."
+  },
+  "player": {
+    "name": "Juror 13",
+    "stats": {
+      "credibility": 0,
+      "process_standing": 1
+    },
+    "inventory": [
+      "admitted exhibits",
+      "testimony summaries",
+      "jury-room layout"
+    ]
+  },
+  "world": {
+    "room": {
+      "clock_minutes": 0,
+      "room_heat": 3,
+      "fatigue": 0,
+      "impatience": 2,
+      "procedure_integrity": 100,
+      "conflict_level": 1
+    },
+    "votes": {
+      "guilty": 11,
+      "not_guilty": 1,
+      "undecided": 1
+    },
+    "critical_nodes": {
+      "opening_ballot": "released",
+      "lone_doubt_defense": "hinted",
+      "knife_weapon_doubt": "sealed",
+      "witness_timing": "sealed",
+      "noise_audibility": "sealed",
+      "sightline_perception": "sealed",
+      "prejudice_exposure": "hinted",
+      "indifference_exposure": "hinted",
+      "final_holdout_collapse": "sealed"
+    },
+    "jurors": [
+      {
+        "id": "juror-01",
+        "label": "Foreman",
+        "public_vote": "guilty",
+        "private_confidence": 6,
+        "doubt_score": 0,
+        "trust_in_player": 0,
+        "conflict_pressure": 1,
+        "switch_gate": "procedure_protected"
+      },
+      {
+        "id": "juror-02",
+        "label": "Juror 2",
+        "public_vote": "guilty",
+        "private_confidence": 5,
+        "doubt_score": 0,
+        "trust_in_player": 0,
+        "conflict_pressure": 2,
+        "switch_gate": "concrete_doubt"
+      },
+      {
+        "id": "juror-03",
+        "label": "Juror 3",
+        "public_vote": "guilty",
+        "private_confidence": 9,
+        "doubt_score": 0,
+        "trust_in_player": -1,
+        "conflict_pressure": 4,
+        "switch_gate": "final_holdout_collapse"
+      },
+      {
+        "id": "juror-04",
+        "label": "Juror 4",
+        "public_vote": "guilty",
+        "private_confidence": 8,
+        "doubt_score": 0,
+        "trust_in_player": 0,
+        "conflict_pressure": 1,
+        "switch_gate": "sightline_perception"
+      },
+      {
+        "id": "juror-05",
+        "label": "Juror 5",
+        "public_vote": "guilty",
+        "private_confidence": 5,
+        "doubt_score": 0,
+        "trust_in_player": 0,
+        "conflict_pressure": 2,
+        "switch_gate": "lived_knowledge_needed"
+      },
+      {
+        "id": "juror-06",
+        "label": "Juror 6",
+        "public_vote": "guilty",
+        "private_confidence": 6,
+        "doubt_score": 0,
+        "trust_in_player": 0,
+        "conflict_pressure": 1,
+        "switch_gate": "practical_reconstruction"
+      },
+      {
+        "id": "juror-07",
+        "label": "Juror 7",
+        "public_vote": "guilty",
+        "private_confidence": 4,
+        "doubt_score": 0,
+        "trust_in_player": -1,
+        "conflict_pressure": 1,
+        "switch_gate": "indifference_exposure"
+      },
+      {
+        "id": "juror-08",
+        "label": "Juror 8",
+        "public_vote": "not_guilty",
+        "private_confidence": 7,
+        "doubt_score": 4,
+        "trust_in_player": 0,
+        "conflict_pressure": 2,
+        "switch_gate": "already_doubt"
+      },
+      {
+        "id": "juror-09",
+        "label": "Juror 9",
+        "public_vote": "guilty",
+        "private_confidence": 5,
+        "doubt_score": 0,
+        "trust_in_player": 0,
+        "conflict_pressure": 1,
+        "switch_gate": "dignity_protected"
+      },
+      {
+        "id": "juror-10",
+        "label": "Juror 10",
+        "public_vote": "guilty",
+        "private_confidence": 8,
+        "doubt_score": 0,
+        "trust_in_player": -2,
+        "conflict_pressure": 3,
+        "switch_gate": "prejudice_isolated"
+      },
+      {
+        "id": "juror-11",
+        "label": "Juror 11",
+        "public_vote": "guilty",
+        "private_confidence": 6,
+        "doubt_score": 0,
+        "trust_in_player": 0,
+        "conflict_pressure": 1,
+        "switch_gate": "procedure_disrespected"
+      },
+      {
+        "id": "juror-12",
+        "label": "Juror 12",
+        "public_vote": "guilty",
+        "private_confidence": 5,
+        "doubt_score": 0,
+        "trust_in_player": 0,
+        "conflict_pressure": 1,
+        "switch_gate": "social_and_evidence_pressure"
+      }
+    ],
+    "recent_topics": [
+      "opening ballot"
+    ],
+    "flags": {
+      "juror_13_public_vote_recorded": false,
+      "outside_evidence_used": false,
+      "sealed_fact_leaked": false,
+      "coercion_used": false
+    },
+    "ending_eligibility": {
+      "reasoned_result": false,
+      "weak_result": true,
+      "hung_room": true,
+      "rushed_conviction": true,
+      "procedural_failure": false,
+      "coerced_acquittal": false
+    },
+    "quests": [
+      "protect the dissent long enough for reasons to be heard",
+      "surface concrete doubt without introducing outside facts",
+      "keep the deliberation legitimate"
+    ],
+    "actors": [
+      "foreman",
+      "juror-02",
+      "juror-03",
+      "juror-04",
+      "juror-05",
+      "juror-06",
+      "juror-07",
+      "juror-08",
+      "juror-09",
+      "juror-10",
+      "juror-11",
+      "juror-12",
+      "juror-13"
+    ],
+    "items": [
+      "knife exhibit",
+      "floor plan",
+      "testimony summaries"
+    ]
+  },
+  "ui": {
+    "panels": [
+      {
+        "id": "scene",
+        "kind": "scene",
+        "title": "Jury Room",
+        "body": "A long table, shut windows, damp shirts, and eleven impatient guilty votes pressing against one dissent."
+      },
+      {
+        "id": "votes",
+        "kind": "custom",
+        "title": "Vote",
+        "body": "Guilty: 11 / Not guilty: 1 / Juror 13: not yet declared"
+      },
+      {
+        "id": "pressure",
+        "kind": "custom",
+        "title": "Pressure",
+        "body": "Heat 3, fatigue 0, impatience 2, conflict 1, procedure 100"
+      },
+      {
+        "id": "goals",
+        "kind": "goals",
+        "title": "Goals",
+        "body": "Protect deliberation. Earn doubt. Do not leak sealed facts or use outside evidence."
+      }
+    ]
+  },
+  "agents": {
+    "topology": "dynamic-main-plus-managers",
+    "last_skill_refresh_turn": 0,
+    "default_roles": [
+      "state_manager",
+      "plot_manager",
+      "procedure_manager",
+      "npc_manager_a",
+      "npc_manager_b"
+    ]
+  }
+}

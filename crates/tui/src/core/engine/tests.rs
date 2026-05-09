@@ -489,6 +489,57 @@ fn turn_tool_registry_builder_keeps_plan_mode_read_only_for_files() {
 }
 
 #[test]
+fn game_player_profile_exposes_only_game_safe_tools() {
+    let config = EngineConfig {
+        game_session: Some(crate::game::GameSession::Notice(
+            crate::game::GameSessionNotice {
+                message: "test game".to_string(),
+                developer_mode: false,
+            },
+        )),
+        ..Default::default()
+    };
+    let (engine, _handle) = Engine::new(config, &Config::default());
+    let registry = engine
+        .build_turn_tool_registry_builder(
+            AppMode::Agent,
+            engine.config.todos.clone(),
+            engine.config.plan_state.clone(),
+        )
+        .build(engine.build_tool_context(AppMode::Agent, false));
+
+    for name in [
+        "game_status",
+        "game_render",
+        "game_lookup",
+        "game_run_driver",
+        "game_commit_turn",
+        "load_skill",
+    ] {
+        assert!(registry.contains(name), "missing player game tool {name}");
+    }
+
+    for name in [
+        "read_file",
+        "write_file",
+        "edit_file",
+        "list_dir",
+        "exec_shell",
+        "git_status",
+        "web_search",
+        "agent_spawn",
+        "rlm",
+        "fim_edit",
+        "game_parallel",
+    ] {
+        assert!(
+            !registry.contains(name),
+            "unexpected player game tool {name}"
+        );
+    }
+}
+
+#[test]
 fn agent_mode_can_build_auto_approved_tool_context() {
     let (engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
 

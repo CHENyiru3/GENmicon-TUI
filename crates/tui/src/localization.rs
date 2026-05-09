@@ -229,6 +229,7 @@ pub enum MessageId {
     CmdEditDescription,
     CmdExitDescription,
     CmdExportDescription,
+    CmdGameDescription,
     CmdHelpDescription,
     CmdHomeDescription,
     CmdHooksDescription,
@@ -245,6 +246,7 @@ pub enum MessageId {
     CmdNetworkDescription,
     CmdNoteDescription,
     CmdPlanDescription,
+    CmdPlayDescription,
     CmdThemeDescription,
     CmdProviderDescription,
     CmdQueueDescription,
@@ -422,6 +424,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdEditDescription,
     MessageId::CmdExitDescription,
     MessageId::CmdExportDescription,
+    MessageId::CmdGameDescription,
     MessageId::CmdHelpDescription,
     MessageId::CmdHomeDescription,
     MessageId::CmdHooksDescription,
@@ -437,6 +440,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdNetworkDescription,
     MessageId::CmdNoteDescription,
     MessageId::CmdPlanDescription,
+    MessageId::CmdPlayDescription,
     MessageId::CmdProviderDescription,
     MessageId::CmdQueueDescription,
     MessageId::CmdRecallDescription,
@@ -741,6 +745,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdEditDescription => "Revise and resubmit the last message",
         MessageId::CmdExitDescription => "Exit the application",
         MessageId::CmdExportDescription => "Export conversation to markdown",
+        MessageId::CmdGameDescription => "Inspect or control the active Game Console session",
         MessageId::CmdHelpDescription => "Show help information",
         MessageId::CmdHomeDescription => "Show home dashboard with stats and quick actions",
         MessageId::CmdHooksDescription => "List configured lifecycle hooks (read-only)",
@@ -763,6 +768,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdPlanDescription => {
             "Switch to plan mode and review suggested implementation steps"
         }
+        MessageId::CmdPlayDescription => "Start or switch the active Game Console session",
         MessageId::CmdThemeDescription => "Toggle between dark and light theme",
         MessageId::CmdProviderDescription => {
             "Switch or view the active LLM backend (deepseek | nvidia-nim | ollama)"
@@ -1028,6 +1034,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdEditDescription => "最後のメッセージを編集して再送信",
         MessageId::CmdExitDescription => "アプリを終了",
         MessageId::CmdExportDescription => "会話を Markdown にエクスポート",
+        MessageId::CmdGameDescription => "アクティブな Game Console セッションを確認・制御",
         MessageId::CmdHelpDescription => "ヘルプを表示",
         MessageId::CmdHomeDescription => "統計とクイックアクション付きのホームダッシュボードを表示",
         MessageId::CmdHooksDescription => {
@@ -1048,6 +1055,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdNetworkDescription => "ネットワーク許可・拒否ルールを管理",
         MessageId::CmdNoteDescription => "永続ノートファイル（.deepseek/notes.md）に追記",
         MessageId::CmdPlanDescription => "Plan モードに切り替え、推奨される実装手順を確認",
+        MessageId::CmdPlayDescription => "アクティブな Game Console セッションを開始・切り替え",
         MessageId::CmdThemeDescription => "テーマ（ダーク/ライト）を切り替え",
         MessageId::CmdProviderDescription => {
             "現在の LLM バックエンドを切り替え・確認（deepseek | nvidia-nim | ollama）"
@@ -1297,6 +1305,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdEditDescription => "修改并重新提交最后一条消息",
         MessageId::CmdExitDescription => "退出应用",
         MessageId::CmdExportDescription => "将对话导出为 Markdown",
+        MessageId::CmdGameDescription => "查看或控制当前 Game Console 会话",
         MessageId::CmdHelpDescription => "显示帮助信息",
         MessageId::CmdHomeDescription => "显示主页面板，含统计与快捷操作",
         MessageId::CmdHooksDescription => "列出已配置的生命周期钩子（只读）",
@@ -1315,6 +1324,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdNetworkDescription => "管理网络允许和拒绝规则",
         MessageId::CmdNoteDescription => "将笔记追加到持久笔记文件（.deepseek/notes.md）",
         MessageId::CmdPlanDescription => "切换到 Plan 模式并查看建议的实现步骤",
+        MessageId::CmdPlayDescription => "启动或切换当前 Game Console 会话",
         MessageId::CmdThemeDescription => "在浅色和深色主题之间切换",
         MessageId::CmdProviderDescription => {
             "切换或查看当前 LLM 后端（deepseek | nvidia-nim | ollama）"
@@ -1552,6 +1562,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CmdEditDescription => "Revisar e reenviar a última mensagem",
         MessageId::CmdExitDescription => "Sair do aplicativo",
         MessageId::CmdExportDescription => "Exportar a conversa para markdown",
+        MessageId::CmdGameDescription => "Inspecionar ou controlar a sessão Game Console ativa",
         MessageId::CmdHelpDescription => "Exibir informações de ajuda",
         MessageId::CmdHomeDescription => "Exibir o painel inicial com estatísticas e ações rápidas",
         MessageId::CmdHooksDescription => {
@@ -1580,6 +1591,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CmdPlanDescription => {
             "Mudar para o modo plan e revisar os passos de implementação sugeridos"
         }
+        MessageId::CmdPlayDescription => "Iniciar ou trocar a sessão Game Console ativa",
         MessageId::CmdThemeDescription => "Alternar entre o tema claro e escuro",
         MessageId::CmdProviderDescription => {
             "Trocar ou exibir o backend LLM ativo (deepseek | nvidia-nim | ollama)"

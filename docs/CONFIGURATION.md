@@ -508,6 +508,35 @@ Method semantics:
 
 Windows users who run inside a known OSC-9 terminal (e.g. WezTerm on Windows) keep getting OSC-9 notifications; the `off` fallback only applies when no recognised `TERM_PROGRAM` is detected.
 
+### Planned Game TUI configuration
+
+Game TUI configuration is planned in
+[`GAME_TUI_FRAMEWORK_SPEC.md`](GAME_TUI_FRAMEWORK_SPEC.md), but the keys are not
+active until the `deepseek play` implementation lands. Do not present these as
+accepted production config before the config loader, `/config` UI, docs, and
+tests are updated together.
+
+Planned shape:
+
+```toml
+[game]
+roots = []
+default_game = ""
+default_save = ""
+developer_mode = false
+
+[game.drivers]
+roots = ["~/.deepseek/game-drivers"]
+```
+
+Intended resolution order is CLI flags, slash command arguments, `[game]`
+config, current workspace `game.toml`, then the game picker.
+
+Project config may provide game roots and defaults, but it must not
+persistently enable developer mode. `game.developer_mode = true` is honored only
+from user/global config; `--dev` and `/game dev` are per-launch or per-session
+overrides.
+
 ### Parsed but currently unused (reserved for future versions)
 
 These keys are accepted by the config loader but not currently used by the interactive TUI or built-in tools:

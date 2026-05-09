@@ -1668,7 +1668,14 @@ impl ToolSpec for AgentSpawnTool {
     }
 
     async fn execute(&self, input: Value, _context: &ToolContext) -> Result<ToolResult, ToolError> {
-        let spawn_request = parse_spawn_request(&input)?;
+        let mut spawn_request = parse_spawn_request(&input)?;
+        if self.name == "game_agent_spawn" {
+            spawn_request.allowed_tools = Some(game_safe_subagent_tools());
+            spawn_request.prompt = format!(
+                "You are a game-scoped processor. Use only native game tools and return a proposal; do not commit state unless explicitly asked.\n\n{}",
+                spawn_request.prompt
+            );
+        }
 
         // Depth cap: reject before locking the manager so we don't introduce
         // unnecessary contention. Mirrors codex's pattern (allow-equal at the
@@ -1984,6 +1991,7 @@ impl ToolSpec for AgentCancelTool {
 /// Tool to list all sub-agents.
 pub struct AgentListTool {
     manager: SharedSubAgentManager,
+    name: &'static str,
 }
 
 /// Tool to close a running sub-agent (alias for cancel).
@@ -2060,20 +2068,34 @@ impl ToolSpec for AgentCloseTool {
 pub struct AgentResumeTool {
     manager: SharedSubAgentManager,
     runtime: SubAgentRuntime,
+    name: &'static str,
 }
 
 impl AgentResumeTool {
     /// Create a new resume tool.
     #[must_use]
     pub fn new(manager: SharedSubAgentManager, runtime: SubAgentRuntime) -> Self {
-        Self { manager, runtime }
+        Self::with_name(manager, runtime, "resume_agent")
+    }
+
+    #[must_use]
+    pub fn with_name(
+        manager: SharedSubAgentManager,
+        runtime: SubAgentRuntime,
+        name: &'static str,
+    ) -> Self {
+        Self {
+            manager,
+            runtime,
+            name,
+        }
     }
 }
 
 #[async_trait]
 impl ToolSpec for AgentResumeTool {
     fn name(&self) -> &'static str {
-        "resume_agent"
+        self.name
     }
 
     fn description(&self) -> &'static str {
@@ -2125,14 +2147,19 @@ impl AgentListTool {
     /// Create a new list tool.
     #[must_use]
     pub fn new(manager: SharedSubAgentManager) -> Self {
-        Self { manager }
+        Self::with_name(manager, "agent_list")
+    }
+
+    #[must_use]
+    pub fn with_name(manager: SharedSubAgentManager, name: &'static str) -> Self {
+        Self { manager, name }
     }
 }
 
 #[async_trait]
 impl ToolSpec for AgentListTool {
     fn name(&self) -> &'static str {
-        "agent_list"
+        self.name
     }
 
     fn description(&self) -> &'static str {
@@ -3796,22 +3823,33 @@ impl SubAgentToolRegistry {
         todo_list: SharedTodoList,
         plan_state: SharedPlanState,
     ) -> Self {
-        // Build the full agent surface — same as the parent's Agent mode.
-        // Children inherit shell, file, patch, search, web, git, diagnostics,
-        // review, RLM, sub-agent management (so grandchildren can spawn),
-        // plus per-child fresh todo/plan state.
         let context = runtime.context.clone();
-        let registry = ToolRegistryBuilder::new()
-            .with_full_agent_surface(
-                Some(runtime.client.clone()),
-                runtime.model.clone(),
-                runtime.manager.clone(),
-                runtime.clone(),
-                runtime.allow_shell,
-                todo_list,
-                plan_state,
-            )
-            .build(context);
+        let game_player_profile = context
+            .game_session
+            .as_ref()
+            .is_some_and(|session| !session.developer_mode());
+        let registry = if game_player_profile {
+            ToolRegistryBuilder::new()
+                .with_game_tools()
+                .with_skill_tools()
+                .build(context)
+        } else {
+            // Build the full agent surface — same as the parent's Agent mode.
+            // Children inherit shell, file, patch, search, web, git, diagnostics,
+            // review, RLM, sub-agent management (so grandchildren can spawn),
+            // plus per-child fresh todo/plan state.
+            ToolRegistryBuilder::new()
+                .with_full_agent_surface(
+                    Some(runtime.client.clone()),
+                    runtime.model.clone(),
+                    runtime.manager.clone(),
+                    runtime.clone(),
+                    runtime.allow_shell,
+                    todo_list,
+                    plan_state,
+                )
+                .build(context)
+        };
 
         Self {
             allowed_tools: explicit_allowed_tools,
@@ -3933,6 +3971,19 @@ fn build_allowed_tools(
     // registry execution guard still blocks approval-gated tools unless the
     // parent runtime is auto-approved.
     Ok(None)
+}
+
+fn game_safe_subagent_tools() -> Vec<String> {
+    [
+        "game_status",
+        "game_render",
+        "game_lookup",
+        "game_run_driver",
+        "load_skill",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }
 
 fn summarize_subagent_result(result: &SubAgentResult) -> String {
