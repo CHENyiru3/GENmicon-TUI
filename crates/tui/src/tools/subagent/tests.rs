@@ -200,6 +200,33 @@ fn test_parse_spawn_request_accepts_objective_and_role_alias() {
 }
 
 #[test]
+fn game_parse_spawn_request_accepts_pack_role() {
+    let input = json!({
+        "prompt": "Propose Rei's next line",
+        "role": "dialogue_girlfriend"
+    });
+    let parsed = parse_spawn_request_for_surface(&input, SpawnSurface::Game)
+        .expect("game pack role should parse");
+    assert_eq!(parsed.agent_type, SubAgentType::General);
+    assert_eq!(
+        parsed.assignment.role.as_deref(),
+        Some("dialogue_girlfriend")
+    );
+
+    let input = json!({
+        "prompt": "Propose Rei's next line",
+        "pack": "dialogue_girlfriend",
+        "role": "worker"
+    });
+    let parsed = parse_spawn_request_for_surface(&input, SpawnSurface::Game)
+        .expect("explicit pack should override generic role alias");
+    assert_eq!(
+        parsed.assignment.role.as_deref(),
+        Some("dialogue_girlfriend")
+    );
+}
+
+#[test]
 fn test_parse_spawn_request_accepts_items_payload() {
     let input = json!({
         "items": [
@@ -317,6 +344,25 @@ fn test_parse_spawn_request_rejects_invalid_role() {
 }
 
 #[test]
+fn game_agent_spawn_tool_is_auto_and_pack_aware() {
+    let runtime = stub_runtime();
+    let manager = runtime.manager.clone();
+    let generic = AgentSpawnTool::with_name(manager.clone(), runtime.clone(), "agent_spawn");
+    let game = AgentSpawnTool::with_name(manager, runtime, "game_agent_spawn");
+
+    assert_eq!(
+        generic.approval_requirement(),
+        ApprovalRequirement::Required
+    );
+    assert_eq!(game.approval_requirement(), ApprovalRequirement::Auto);
+    let schema = game.input_schema();
+    assert!(
+        schema.pointer("/properties/pack").is_some(),
+        "game spawn schema should expose pack: {schema}"
+    );
+}
+
+#[test]
 fn test_parse_spawn_request_rejects_conflicting_type_and_role() {
     let input = json!({
         "prompt": "inspect internals",
@@ -328,6 +374,33 @@ fn test_parse_spawn_request_rejects_conflicting_type_and_role() {
         err.to_string()
             .contains("Conflicting type/agent_type and role/agent_role")
     );
+}
+
+#[test]
+fn game_pack_prompt_contains_scoped_context() {
+    let pack = deepseek_game::agents::AgentPack {
+        role: "dialogue_girlfriend".to_string(),
+        output_contract: "propose Rei dialogue only".to_string(),
+        allowed_files: vec![std::path::PathBuf::from("content/scene.md")],
+        current_scene: json!({"title": "platform"}),
+        relevant_save_slice: json!({
+            "npc": {"id": "girlfriend", "name": "Rei"},
+            "facts": {"relationship": {"trust": 3}}
+        }),
+        callable_driver_functions: vec!["relationship_score".to_string()],
+        assigned_skills: vec![std::path::PathBuf::from("skills/npc/girlfriend/SKILL.md")],
+    };
+
+    assert!(find_game_pack(std::slice::from_ref(&pack), "girlfriend").is_some());
+    let prompt = game_scoped_prompt(Some(&pack), "Propose her reaction");
+    assert!(prompt.contains("dialogue_girlfriend"), "{prompt}");
+    assert!(
+        prompt.contains("skills/npc/girlfriend/SKILL.md"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("relationship_score"), "{prompt}");
+    assert!(prompt.contains("Relevant save slice"), "{prompt}");
+    assert!(prompt.contains("do not call game_commit_turn"), "{prompt}");
 }
 
 #[test]
@@ -482,9 +555,10 @@ fn test_build_assignment_prompt_includes_metadata() {
         &assignment,
         &SubAgentType::Explore,
     );
-    assert!(prompt.contains("Assignment metadata"));
+    assert!(prompt.contains("<deepseek:subagent_assignment>"));
     assert!(prompt.contains("resolved_type: explore"));
     assert!(prompt.contains("role: explorer"));
+    assert!(prompt.contains("<deepseek:task>"));
 }
 
 #[test]
@@ -987,10 +1061,15 @@ fn parse_spawn_request_cwd_empty_string_yields_none() {
 fn build_subagent_system_prompt_appends_role_when_set() {
     let assignment = SubAgentAssignment::new("p".to_string(), Some("worker".to_string()));
     let prompt = build_subagent_system_prompt(&SubAgentType::General, &assignment);
+    assert!(prompt.contains("Runtime contract:"));
+    assert!(prompt.contains("Runtime role: `worker`"));
     assert!(
-        prompt.ends_with("You are operating in the role of `worker`."),
-        "expected role line at end, got: {}",
-        &prompt[prompt.len().saturating_sub(80)..]
+        prompt
+            .find("Runtime role: `worker`")
+            .is_some_and(|role| prompt
+                .find("## Output Contract (Mandatory)")
+                .is_some_and(|contract| role < contract)),
+        "runtime overlay should appear before the output contract"
     );
 }
 
@@ -998,14 +1077,14 @@ fn build_subagent_system_prompt_appends_role_when_set() {
 fn build_subagent_system_prompt_skips_role_when_none() {
     let assignment = SubAgentAssignment::new("p".to_string(), None);
     let prompt = build_subagent_system_prompt(&SubAgentType::General, &assignment);
-    assert!(!prompt.contains("You are operating in the role of"));
+    assert!(prompt.contains("Runtime role: `default`"));
 }
 
 #[test]
 fn build_subagent_system_prompt_skips_role_when_blank() {
     let assignment = SubAgentAssignment::new("p".to_string(), Some("   ".to_string()));
     let prompt = build_subagent_system_prompt(&SubAgentType::General, &assignment);
-    assert!(!prompt.contains("You are operating in the role of"));
+    assert!(prompt.contains("Runtime role: `default`"));
 }
 
 #[test]
@@ -1679,5 +1758,19 @@ fn subagent_completion_payload_carries_existing_sentinel_format() {
     assert!(
         second.contains("\"agent_id\":\"agent_test\""),
         "sentinel JSON includes agent_id"
+    );
+}
+
+#[test]
+fn subagent_completion_summary_extracts_summary_section() {
+    let mut snap = make_snapshot(SubAgentStatus::Completed);
+    snap.result = Some(
+        "### SUMMARY\nOutcome: DONE. Found the parser boundary.\n\n### EVIDENCE\n- crates/tui/src/x.rs:1-3 - read\n\n### CHANGES\nNone.\n\n### RISKS\nNone observed.\n\n### BLOCKERS\nNone."
+            .to_string(),
+    );
+
+    assert_eq!(
+        summarize_subagent_result(&snap),
+        "Outcome: DONE. Found the parser boundary."
     );
 }

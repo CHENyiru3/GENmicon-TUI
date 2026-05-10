@@ -9,7 +9,7 @@ use crate::driver::{DriverResolver, load_driver};
 use crate::interaction::build_playbook;
 use crate::lookup::{HARD_LOOKUP_BYTES, LookupRequest, lookup};
 use crate::manifest::load_game;
-use crate::render::{RenderPanelKind, render_panels};
+use crate::render::{RenderPanelKind, render_panels, render_view_snapshot};
 use crate::save::{CommitRequest, STATE_FILE, TURN_LOG_FILE, commit_turn, load_save};
 use crate::script::{DriverCall, run_driver_function};
 use crate::{GameError, demo};
@@ -266,6 +266,148 @@ fn render_panels_use_state_ui_or_structured_fallback() {
 }
 
 #[test]
+fn render_view_snapshot_projects_player_console_data() {
+    let state = demo::reconciliation_initial_state("galgame", "0.1.0");
+    let view = render_view_snapshot(&state);
+
+    assert_eq!(view.scene_title, "station overpass");
+    assert!(view.scene.contains("walking away"));
+    assert_eq!(view.figure_title, "绫波丽 (Ayanami Rei)");
+    assert!(view.figure.contains("Last:"));
+    assert_eq!(view.figure_emotion.as_deref(), Some("sad"));
+    assert_eq!(
+        view.figure_art_source
+            .as_ref()
+            .map(|source| source.path.as_str()),
+        Some("assets/portraits/ayanami-rei/Sad.ansi")
+    );
+    assert!(
+        view.status
+            .iter()
+            .any(|line| line.contains("Relationship Score"))
+    );
+    assert!(
+        view.tasks
+            .iter()
+            .any(|line| line.contains("catch up emotionally"))
+    );
+    assert_eq!(view.choices.len(), 3);
+    assert_eq!(view.validation, "valid");
+}
+
+#[test]
+fn reconciliation_reaction_pack_maps_all_rei_faces() {
+    let state = demo::reconciliation_initial_state("galgame", "0.1.0");
+    let emotions = state
+        .pointer("/ui/reactions/figure/emotions")
+        .and_then(Value::as_object)
+        .expect("reaction emotions should be present");
+    let expected = [
+        ("neutral", "Neutral.ansi"),
+        ("gentle_happiness", "Gentle_happiness.ansi"),
+        ("cheerful", "Cheerful.ansi"),
+        ("shy", "Shy.ansi"),
+        ("surprised", "Surprised.ansi"),
+        ("confused", "Confused.ansi"),
+        ("worried", "Worried.ansi"),
+        ("sad", "Sad.ansi"),
+        ("teary", "Teary.ansi"),
+        ("angry", "Angry.ansi"),
+        ("annoyed", "Annoyed.ansi"),
+        ("flustered", "Flustered.ansi"),
+        ("resolute", "resolute.ansi"),
+        ("apathetic", "Apathetic.ansi"),
+        ("disgusted", "Disgusted.ansi"),
+        ("soft_affection", "Soft_affection.ansi"),
+    ];
+
+    assert_eq!(emotions.len(), expected.len());
+    for (emotion, file) in expected {
+        assert_eq!(
+            emotions
+                .get(emotion)
+                .and_then(|entry| entry.get("file"))
+                .and_then(Value::as_str),
+            Some(file),
+            "{emotion}"
+        );
+    }
+}
+
+#[test]
+fn render_view_snapshot_selects_dynamic_reaction_from_dialogue_cues() {
+    let cheerful = json!({
+        "revision": 1,
+        "cast": [{
+            "id": "girlfriend",
+            "name": "绫波丽 (Ayanami Rei)",
+            "mood": "guarded",
+            "visible_cue": "an open smile and brighter eyes",
+            "last_line": "That is the first honest thing you have said tonight."
+        }],
+        "conversation": {
+            "current_speaker": "绫波丽 (Ayanami Rei)",
+            "last_exchange": [{
+                "speaker": "绫波丽 (Ayanami Rei)",
+                "tone": "pleased",
+                "line": "She lets the open smile stay for one second."
+            }]
+        },
+        "ui": {"reactions": {"default": "neutral"}}
+    });
+    assert_eq!(
+        render_view_snapshot(&cheerful).figure_emotion.as_deref(),
+        Some("cheerful")
+    );
+
+    let flustered = json!({
+        "revision": 1,
+        "cast": [{
+            "id": "girlfriend",
+            "name": "绫波丽 (Ayanami Rei)",
+            "mood": "guarded",
+            "visible_cue": "caught off guard emotionally",
+            "last_line": "Do not say that unless you mean it."
+        }],
+        "conversation": {
+            "current_speaker": "绫波丽 (Ayanami Rei)",
+            "last_exchange": [{
+                "speaker": "绫波丽 (Ayanami Rei)",
+                "tone": "flustered",
+                "line": "She looks caught off guard and turns away."
+            }]
+        },
+        "ui": {"reactions": {"default": "neutral"}}
+    });
+    assert_eq!(
+        render_view_snapshot(&flustered).figure_emotion.as_deref(),
+        Some("flustered")
+    );
+}
+
+#[test]
+fn render_view_snapshot_rejects_invalid_ascii_frames() {
+    let state = json!({
+        "revision": 2,
+        "scene": {"location": "Room", "summary": "A quiet room."},
+        "ui": {
+            "ascii": {
+                "scene_art": [
+                    {"cols": 2, "rows": 1, "lines": ["too wide"]},
+                    {"cols": 4, "rows": 2, "lines": ["....", "...."]}
+                ],
+                "figure_art": {"cols": 2, "rows": 1, "lines": ["\u{1b}[31m"]}
+            }
+        }
+    });
+
+    let view = render_view_snapshot(&state);
+    assert_eq!(view.revision, 2);
+    assert_eq!(view.scene_art.as_ref().map(|frame| frame.rows), Some(2));
+    assert!(view.figure_art.is_none());
+}
+
+#[test]
 fn playbook_exposes_choices_and_git_like_story_branch() {
     let state = demo::reconciliation_initial_state("galgame", "0.1.0");
     let playbook = build_playbook(&state);
@@ -285,11 +427,26 @@ fn playbook_exposes_choices_and_git_like_story_branch() {
             .conversation
             .as_ref()
             .map(|conversation| conversation.current_speaker.as_str()),
-        Some("Mina")
+        Some("绫波丽 (Ayanami Rei)")
     );
     assert_eq!(
         playbook.active_node.as_ref().map(|node| node.id.as_str()),
         Some("opening_apology")
+    );
+    assert_eq!(playbook.mode, "skill_limited");
+    assert!(!playbook.freeform_allowed);
+    assert!(
+        playbook
+            .recommendation_policy
+            .contains("slight non-spoiling reorientation")
+    );
+    assert_eq!(
+        playbook
+            .action_skills
+            .iter()
+            .map(|skill| skill.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["chat", "move", "reflection"]
     );
     assert_eq!(playbook.suggestions.len(), 3);
     assert_eq!(
@@ -375,6 +532,53 @@ fn agent_packs_are_limited_to_driver_declared_roles() {
         vec!["relationship_score".to_string()]
     );
     assert!(packs[0].relevant_save_slice.get("player").is_some());
+}
+
+#[test]
+fn dialogue_role_expands_to_active_npc_pack() {
+    let temp = TempDir::new("npc-agents");
+    let drivers = temp.path().join("drivers");
+    write_dialogue_driver(&drivers);
+    let loaded = load_driver(drivers.join("galgame/0.1.0")).expect("driver should load");
+    let state = demo::reconciliation_initial_state("galgame", "0.1.0");
+    let packs = build_agent_packs(&loaded.manifest, &state);
+
+    assert_eq!(packs.len(), 3);
+    assert_eq!(packs[0].role, "state");
+    assert_eq!(packs[1].role, "plot");
+    assert_eq!(packs[2].role, "dialogue_girlfriend");
+    assert!(packs[2].output_contract.contains("绫波丽 (Ayanami Rei)"));
+    assert_eq!(
+        packs[2].relevant_save_slice.pointer("/npc/name"),
+        Some(&json!("绫波丽 (Ayanami Rei)"))
+    );
+    assert_eq!(
+        packs[2].relevant_save_slice.pointer("/npc/id"),
+        Some(&json!("girlfriend"))
+    );
+    assert_eq!(
+        packs[2]
+            .relevant_save_slice
+            .pointer("/facts/rei/can_be_pregnant"),
+        Some(&json!(true))
+    );
+    assert_eq!(
+        packs[2]
+            .relevant_save_slice
+            .pointer("/facts/relationship/pregnancy_established"),
+        Some(&json!(false))
+    );
+    assert!(packs[2].relevant_save_slice.get("backstory").is_some());
+    assert!(
+        packs[2]
+            .allowed_files
+            .contains(&PathBuf::from("skills/npc/girlfriend/SKILL.md"))
+    );
+    assert!(
+        packs[2]
+            .assigned_skills
+            .contains(&PathBuf::from("skills/npc/girlfriend/SKILL.md"))
+    );
 }
 
 #[test]
@@ -487,6 +691,55 @@ function = "relationship_score"
 mutates = false
 "#
         ),
+    )
+    .expect("write driver manifest");
+}
+
+fn write_dialogue_driver(root: &Path) {
+    let driver = root.join("galgame").join("0.1.0");
+    fs::create_dir_all(driver.join("scripts")).expect("create scripts");
+    fs::create_dir_all(driver.join("agent_templates")).expect("create templates");
+    fs::write(
+        driver.join("scripts/relationship.star"),
+        "def relationship_score(current_score, player_action):\n    return {\"score\": current_score, \"delta\": 0}\n",
+    )
+    .expect("write script");
+    fs::write(driver.join("agent_templates/state.md"), "state").expect("write state template");
+    fs::write(driver.join("agent_templates/plot.md"), "plot").expect("write plot template");
+    fs::write(driver.join("agent_templates/dialogue.md"), "dialogue")
+        .expect("write dialogue template");
+    fs::write(
+        driver.join("driver.toml"),
+        r#"
+[driver]
+id = "galgame"
+title = "Galgame Driver"
+version = "0.1.0"
+
+[runtime]
+script_engine = "starlark"
+default_topology = "dynamic-main-plus-managers"
+
+[skills]
+entry = "skills/galgame/SKILL.md"
+
+[scripts]
+root = "scripts"
+
+[subagents]
+default_roles = ["state", "plot", "dialogue"]
+max_active = 3
+
+[subagents.templates]
+state = "agent_templates/state.md"
+plot = "agent_templates/plot.md"
+dialogue = "agent_templates/dialogue.md"
+
+[functions.relationship_score]
+script = "scripts/relationship.star"
+function = "relationship_score"
+mutates = false
+"#,
     )
     .expect("write driver manifest");
 }

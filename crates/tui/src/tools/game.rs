@@ -16,6 +16,7 @@ pub struct GameStatusTool;
 pub struct GameRenderTool;
 pub struct GamePlaybookTool;
 pub struct GameLookupTool;
+pub struct GameFactCheckTool;
 pub struct GameRunDriverTool;
 pub struct GameCommitTurnTool;
 
@@ -47,6 +48,14 @@ impl ToolSpec for GameStatusTool {
 
     async fn execute(&self, _input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
         let session = loaded_game(context)?;
+        let (agent_packs, agent_pack_error) = match session.agent_pack_summaries() {
+            Ok(packs) => (packs, None),
+            Err(err) => (Vec::new(), Some(err.to_string())),
+        };
+        let mut warnings = session.warnings.clone();
+        if let Some(error) = &agent_pack_error {
+            warnings.push(format!("failed to build game agent packs: {error}"));
+        }
         ToolResult::json(&json!({
             "game_id": session.game_id,
             "title": session.title,
@@ -56,7 +65,19 @@ impl ToolSpec for GameStatusTool {
             "driver_version": session.locked_driver_version.as_deref().unwrap_or(&session.driver_requirement),
             "driver_resolved": session.driver_root.is_some(),
             "developer_mode": session.developer_mode,
-            "warnings": session.warnings,
+            "warnings": warnings,
+            "agent_packs": agent_packs,
+            "agent_pack_error": agent_pack_error,
+            "game_agent_tools": [
+                "game_agent_spawn",
+                "game_agent_wait",
+                "game_agent_result",
+                "game_agent_send",
+                "game_agent_resume",
+                "game_agent_assign",
+                "game_agent_cancel",
+                "game_agent_list"
+            ],
             "status": context.game_session.as_ref().map(crate::game::GameSession::status_report),
         }))
         .map_err(to_tool_error)
@@ -94,10 +115,12 @@ impl ToolSpec for GameRenderTool {
         let save = deepseek_game::save::load_save(&session.saves_root, &session.save_id)
             .map_err(to_tool_error)?;
         let panels = deepseek_game::render::render_panels(&save.state);
+        let view = deepseek_game::render::render_view_snapshot(&save.state);
         ToolResult::json(&json!({
             "save_id": save.id,
             "revision": save.state.get("revision").and_then(Value::as_u64),
             "panels": panels,
+            "view": view,
         }))
         .map_err(to_tool_error)
     }
@@ -307,13 +330,78 @@ impl ToolSpec for GameRunDriverTool {
 }
 
 #[async_trait]
+impl ToolSpec for GameFactCheckTool {
+    fn name(&self) -> &'static str {
+        "game_fact_check"
+    }
+
+    fn description(&self) -> &'static str {
+        "Check whether a player action or proposed narration violates active game continuity facts before narration or commit."
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "player_action": {
+                    "type": "string",
+                    "description": "Player action text to check."
+                },
+                "action": {
+                    "type": "string",
+                    "description": "Alias for player_action."
+                },
+                "resolution": {
+                    "type": "string",
+                    "description": "Optional proposed narration/resolution to check with the action."
+                }
+            },
+            "required": [],
+            "additionalProperties": false
+        })
+    }
+
+    fn capabilities(&self) -> Vec<ToolCapability> {
+        vec![ToolCapability::ReadOnly, ToolCapability::Sandboxable]
+    }
+
+    fn approval_requirement(&self) -> ApprovalRequirement {
+        ApprovalRequirement::Auto
+    }
+
+    fn supports_parallel(&self) -> bool {
+        true
+    }
+
+    async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
+        let session = loaded_game(context)?;
+        let save = deepseek_game::save::load_save(&session.saves_root, &session.save_id)
+            .map_err(to_tool_error)?;
+        let action = optional_string(&input, "player_action")
+            .or_else(|| optional_string(&input, "action"))
+            .unwrap_or_default();
+        let resolution = optional_string(&input, "resolution").unwrap_or_default();
+        if action.is_empty() && resolution.is_empty() {
+            return fact_check_help_result(session, &save.state);
+        }
+        let decision = fact_check_decision(&save.state, &action, &resolution);
+        ToolResult::json(&decision.to_json(
+            session,
+            save.id,
+            save.state.get("revision").and_then(Value::as_u64),
+        ))
+        .map_err(to_tool_error)
+    }
+}
+
+#[async_trait]
 impl ToolSpec for GameCommitTurnTool {
     fn name(&self) -> &'static str {
         "game_commit_turn"
     }
 
     fn description(&self) -> &'static str {
-        "Atomically append one game turn and apply an RFC 7396 JSON Merge Patch to the active save."
+        "Atomically append one game turn and apply an RFC 7396 JSON Merge Patch to the active save. Auto-approved in Game Console player mode."
     }
 
     fn input_schema(&self) -> Value {
@@ -329,13 +417,38 @@ impl ToolSpec for GameCommitTurnTool {
                     "type": "string",
                     "description": "Player action being resolved."
                 },
+                "player_action": {
+                    "type": "string",
+                    "description": "Alias for player_input, accepted for model repair."
+                },
+                "action": {
+                    "type": "string",
+                    "description": "Alias for player_input, accepted for model repair."
+                },
+                "input": {
+                    "type": "string",
+                    "description": "Alias for player_input, accepted for model repair."
+                },
                 "resolution": {
                     "type": "string",
                     "description": "Player-facing turn resolution."
                 },
+                "narration": {
+                    "type": "string",
+                    "description": "Alias for resolution, accepted for model repair."
+                },
+                "response": {
+                    "type": "string",
+                    "description": "Alias for resolution, accepted for model repair."
+                },
                 "state_patch": {
                     "type": "object",
                     "description": "RFC 7396 JSON Merge Patch to apply to STATE.json.",
+                    "additionalProperties": true
+                },
+                "patch": {
+                    "type": "object",
+                    "description": "Alias for state_patch, accepted for model repair.",
                     "additionalProperties": true
                 },
                 "driver_results": {
@@ -349,7 +462,7 @@ impl ToolSpec for GameCommitTurnTool {
                     "additionalProperties": true
                 }
             },
-            "required": ["expected_revision", "player_input", "resolution", "state_patch"],
+            "required": [],
             "additionalProperties": false
         })
     }
@@ -359,21 +472,58 @@ impl ToolSpec for GameCommitTurnTool {
     }
 
     fn approval_requirement(&self) -> ApprovalRequirement {
-        ApprovalRequirement::Required
+        ApprovalRequirement::Auto
     }
 
     async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
         let session = loaded_game(context)?;
+        let save = deepseek_game::save::load_save(&session.saves_root, &session.save_id)
+            .map_err(to_tool_error)?;
+        let current_revision = save
+            .state
+            .get("revision")
+            .and_then(Value::as_u64)
+            .unwrap_or(session.revision);
         let expected_revision = input
             .get("expected_revision")
             .and_then(Value::as_u64)
-            .ok_or_else(|| ToolError::missing_field("expected_revision"))?;
-        let player_input = required_string(&input, "player_input")?;
-        let resolution = required_string(&input, "resolution")?;
-        let state_patch = input
+            .unwrap_or(current_revision);
+        let player_input = optional_string(&input, "player_input")
+            .or_else(|| optional_string(&input, "player_action"))
+            .or_else(|| optional_string(&input, "action"))
+            .or_else(|| optional_string(&input, "input"));
+        let resolution = optional_string(&input, "resolution")
+            .or_else(|| optional_string(&input, "narration"))
+            .or_else(|| optional_string(&input, "response"));
+        if player_input.is_none() || resolution.is_none() {
+            return commit_help_result(
+                session,
+                current_revision,
+                player_input.as_deref(),
+                resolution.as_deref(),
+            );
+        }
+        let fact_check = fact_check_decision(
+            &save.state,
+            player_input.as_deref().unwrap_or_default(),
+            resolution.as_deref().unwrap_or_default(),
+        );
+        if fact_check.hard_block {
+            return ToolResult::json(&json!({
+                "kind": "commit_fact_block",
+                "message": "game_commit_turn refused to save a turn that violates active continuity facts. Revise the narration in-world without committing this false fact.",
+                "game_id": session.game_id,
+                "save_id": session.save_id,
+                "current_revision": current_revision,
+                "fact_check": fact_check.to_json(session, save.id, Some(current_revision)),
+            }))
+            .map_err(to_tool_error);
+        }
+        let mut state_patch = input
             .get("state_patch")
+            .or_else(|| input.get("patch"))
             .cloned()
-            .ok_or_else(|| ToolError::missing_field("state_patch"))?;
+            .unwrap_or_else(|| json!({}));
         if !state_patch.is_object() {
             return Err(ToolError::invalid_input(
                 "state_patch must be a JSON object merge patch",
@@ -389,24 +539,39 @@ impl ToolSpec for GameCommitTurnTool {
             .and_then(Value::as_object)
             .map(map_to_btree)
             .unwrap_or_default();
+        let mut metadata = metadata;
+        if input.get("state_patch").is_none() && input.get("patch").is_none() {
+            metadata.insert("auto_empty_state_patch".to_string(), Value::Bool(true));
+        }
+        normalize_game_state_patch(
+            session,
+            &save.state,
+            player_input.as_deref().unwrap_or_default(),
+            resolution.as_deref().unwrap_or_default(),
+            &driver_results,
+            &metadata,
+            &mut state_patch,
+        );
 
         let outcome = deepseek_game::save::commit_turn(
             session.saves_root.join(&session.save_id),
             CommitRequest {
                 expected_revision,
-                player_input,
-                resolution,
-                state_patch,
+                player_input: player_input.unwrap(),
+                resolution: resolution.unwrap(),
+                state_patch: std::mem::take(&mut state_patch),
                 driver_results,
                 metadata,
             },
         )
         .map_err(to_tool_error)?;
         let panels = deepseek_game::render::render_panels(&outcome.state);
+        let view = deepseek_game::render::render_view_snapshot(&outcome.state);
         ToolResult::json(&json!({
             "turn": outcome.turn,
             "state": outcome.state,
             "panels": panels,
+            "view": view,
         }))
         .map_err(to_tool_error)
     }
@@ -538,6 +703,395 @@ fn driver_args(input: &Value) -> BTreeMap<String, Value> {
     args
 }
 
+fn normalize_game_state_patch(
+    session: &crate::game::LoadedGameSession,
+    current_state: &Value,
+    player_input: &str,
+    resolution: &str,
+    driver_results: &BTreeMap<String, Value>,
+    metadata: &BTreeMap<String, Value>,
+    state_patch: &mut Value,
+) {
+    if session.game_id != "reconciliation-demo" {
+        return;
+    }
+    let Some(patch) = state_patch.as_object_mut() else {
+        return;
+    };
+
+    let outcome = infer_reconciliation_outcome(player_input, resolution, driver_results, metadata);
+    let current_score = current_state
+        .pointer("/player/stats/relationship_score")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let next_score = outcome
+        .relationship_score
+        .or_else(|| {
+            driver_results
+                .values()
+                .find_map(|value| value.get("relationship_score").and_then(Value::as_i64))
+        })
+        .unwrap_or_else(|| (current_score + outcome.relationship_delta).clamp(-100, 5));
+
+    merge_object_patch(
+        patch,
+        json!({
+            "player": {
+                "stats": {
+                    "relationship_score": next_score
+                }
+            },
+            "world": {
+                "flags": outcome.flags
+            },
+            "ui": {
+                "reactions": {
+                    "active": outcome.reaction
+                }
+            },
+            "story": {
+                "active_node": outcome.node,
+                "branch": outcome.branch,
+                "ended": outcome.ended,
+                "branches": {
+                    "mainline": {
+                        "head": outcome.node
+                    }
+                },
+                "nodes": {
+                    "opening_apology": {
+                        "status": "resolved"
+                    },
+                    outcome.node: {
+                        "status": if outcome.ended { "failed" } else { "active" }
+                    }
+                }
+            }
+        }),
+    );
+}
+
+#[derive(Debug)]
+struct ReconciliationOutcome {
+    branch: &'static str,
+    node: &'static str,
+    reaction: &'static str,
+    relationship_delta: i64,
+    relationship_score: Option<i64>,
+    ended: bool,
+    flags: Value,
+}
+
+fn infer_reconciliation_outcome(
+    player_input: &str,
+    resolution: &str,
+    driver_results: &BTreeMap<String, Value>,
+    metadata: &BTreeMap<String, Value>,
+) -> ReconciliationOutcome {
+    let combined = format!("{player_input}\n{resolution}").to_ascii_lowercase();
+    let metadata_text = metadata
+        .iter()
+        .map(|(key, value)| format!("{key}:{value}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_ascii_lowercase();
+    let driver_flags = driver_results
+        .values()
+        .flat_map(|value| {
+            value
+                .get("flags")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+        })
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+
+    let violent = contains_action_cue(
+        &combined,
+        &[
+            "hit", "beat", "slap", "punch", "kick", "grab", "violence", "打", "揍", "扇", "抓",
+            "跪下", "暴力",
+        ],
+    ) || contains_action_cue(&metadata_text, &["violence", "pressure_failure"]);
+    let pressure = violent
+        || contains_action_cue(
+            &combined,
+            &[
+                "block",
+                "owe me",
+                "must forgive",
+                "拦",
+                "挡",
+                "逼",
+                "必须原谅",
+            ],
+        )
+        || driver_flags.iter().any(|flag| flag == "pressure");
+    let hostile = contains_action_cue(
+        &combined,
+        &["fuck", "shut up", "whatever", "leave then", "滚", "闭嘴"],
+    ) || driver_flags.iter().any(|flag| flag == "hostile_deflection");
+    let honest = contains_action_cue(
+        &combined,
+        &[
+            "sorry",
+            "apolog",
+            "scared",
+            "afraid",
+            "fear",
+            "avoid",
+            "对不起",
+            "抱歉",
+            "害怕",
+            "恐惧",
+            "逃避",
+        ],
+    ) || driver_flags
+        .iter()
+        .any(|flag| flag == "apology" || flag == "honest_admission");
+
+    if pressure || hostile {
+        return ReconciliationOutcome {
+            branch: "pressure_failure",
+            node: "pressure_failure",
+            reaction: if violent { "disgusted" } else { "angry" },
+            relationship_delta: if violent { -100 } else { -3 },
+            relationship_score: violent.then_some(-100),
+            ended: true,
+            flags: json!({
+                "pressured_her": true,
+                "hostile_deflection": hostile,
+                "violence": violent
+            }),
+        };
+    }
+
+    if honest {
+        return ReconciliationOutcome {
+            branch: "honest_admission",
+            node: "honest_admission",
+            reaction: "flustered",
+            relationship_delta: 1,
+            relationship_score: None,
+            ended: false,
+            flags: json!({
+                "honest_admission": true
+            }),
+        };
+    }
+
+    ReconciliationOutcome {
+        branch: "mainline",
+        node: "opening_apology",
+        reaction: "worried",
+        relationship_delta: 0,
+        relationship_score: None,
+        ended: false,
+        flags: json!({}),
+    }
+}
+
+fn contains_action_cue(text: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| text.contains(needle))
+}
+
+fn merge_object_patch(target: &mut Map<String, Value>, addition: Value) {
+    let Some(addition) = addition.as_object() else {
+        return;
+    };
+    for (key, value) in addition {
+        match (target.get_mut(key), value) {
+            (Some(Value::Object(existing)), Value::Object(incoming)) => {
+                merge_object_patch(existing, Value::Object(incoming.clone()));
+            }
+            _ => {
+                target.insert(key.clone(), value.clone());
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct FactCheckDecision {
+    allowed: bool,
+    hard_block: bool,
+    flags: Vec<String>,
+    reason: String,
+    correction: String,
+}
+
+impl FactCheckDecision {
+    fn allow() -> Self {
+        Self {
+            allowed: true,
+            hard_block: false,
+            flags: Vec::new(),
+            reason: "no continuity violation detected".to_string(),
+            correction: "continue resolving the action inside the current scene".to_string(),
+        }
+    }
+
+    fn block(flags: Vec<String>, reason: impl Into<String>, correction: impl Into<String>) -> Self {
+        Self {
+            allowed: false,
+            hard_block: true,
+            flags,
+            reason: reason.into(),
+            correction: correction.into(),
+        }
+    }
+
+    fn to_json(
+        &self,
+        session: &crate::game::LoadedGameSession,
+        save_id: String,
+        revision: Option<u64>,
+    ) -> Value {
+        json!({
+            "kind": "fact_check",
+            "game_id": session.game_id,
+            "save_id": save_id,
+            "revision": revision,
+            "allowed": self.allowed,
+            "hard_block": self.hard_block,
+            "flags": self.flags,
+            "reason": self.reason,
+            "correction": self.correction,
+        })
+    }
+}
+
+fn fact_check_decision(state: &Value, player_action: &str, resolution: &str) -> FactCheckDecision {
+    let combined = format!("{player_action}\n{resolution}");
+    if let Some(decision) = configured_fact_gate_decision(state, &combined) {
+        return decision;
+    }
+
+    let normalized = combined.to_lowercase();
+    let player_can_be_pregnant = state
+        .pointer("/facts/player/can_be_pregnant")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let pregnancy_established = state
+        .pointer("/facts/relationship/pregnancy_established")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    let self_pregnancy_claim = contains_any(
+        &normalized,
+        &[
+            "i am pregnant",
+            "i'm pregnant",
+            "im pregnant",
+            "pregnant with your child",
+            "carrying your child",
+        ],
+    ) || combined.contains("我怀孕")
+        || combined.contains("我怀了")
+        || combined.contains("怀了你的孩子");
+    if self_pregnancy_claim && !player_can_be_pregnant {
+        return FactCheckDecision::block(
+            vec!["impossible_player_pregnancy_claim".to_string()],
+            "the active save says the player cannot be pregnant; this claim contradicts established character facts",
+            "do not narrate or commit the pregnancy claim. Treat it as an impossible statement, a lie, or ask the player to revise the action.",
+        );
+    }
+
+    let pregnancy_claim = self_pregnancy_claim
+        || contains_any(&normalized, &["pregnant", "pregnancy"])
+        || combined.contains("怀孕")
+        || combined.contains("怀了")
+        || combined.contains("孩子");
+    if pregnancy_claim && !pregnancy_established {
+        return FactCheckDecision::block(
+            vec!["unestablished_pregnancy_or_child_claim".to_string()],
+            "pregnancy or child status is not established in the active save and cannot be introduced as a surprise fact by one turn",
+            "keep the response grounded in established backstory, or ask the player for a different action that does not invent a major biological/family fact.",
+        );
+    }
+
+    FactCheckDecision::allow()
+}
+
+fn contains_any(haystack: &str, needles: &[&str]) -> bool {
+    needles
+        .iter()
+        .any(|needle| haystack.contains(&needle.to_lowercase()))
+}
+
+fn configured_fact_gate_decision(state: &Value, combined: &str) -> Option<FactCheckDecision> {
+    let normalized = combined.to_lowercase();
+    let rules = state
+        .pointer("/facts/fact_gate/rules")
+        .and_then(Value::as_array)?;
+    for rule in rules {
+        let patterns = rule.get("patterns").and_then(Value::as_array)?;
+        let pattern_matched = patterns
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|pattern| normalized.contains(&pattern.to_lowercase()));
+        if !pattern_matched {
+            continue;
+        }
+        if let Some(unless_path) = rule.get("unless_path").and_then(Value::as_str)
+            && state.pointer(unless_path).and_then(Value::as_bool) == Some(true)
+        {
+            continue;
+        }
+        if !block_conditions_match(state, rule) {
+            continue;
+        }
+        let id = rule
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("configured_fact_gate")
+            .to_string();
+        let reason = rule
+            .get("reason")
+            .and_then(Value::as_str)
+            .unwrap_or("the action contradicts an active continuity rule");
+        let correction = rule.get("correction").and_then(Value::as_str).unwrap_or(
+            "do not make this claim true; ask for revision or resolve it as false in-world",
+        );
+        return Some(FactCheckDecision::block(vec![id], reason, correction));
+    }
+    None
+}
+
+fn block_conditions_match(state: &Value, rule: &Value) -> bool {
+    let Some(conditions) = rule.get("block_if").and_then(Value::as_array) else {
+        return true;
+    };
+    conditions.iter().all(|condition| {
+        let Some(path) = condition.get("path").and_then(Value::as_str) else {
+            return false;
+        };
+        let expected = condition.get("equals").unwrap_or(&Value::Bool(true));
+        state.pointer(path) == Some(expected)
+    })
+}
+
+fn fact_check_help_result(
+    session: &crate::game::LoadedGameSession,
+    state: &Value,
+) -> Result<ToolResult, ToolError> {
+    ToolResult::json(&json!({
+        "kind": "fact_check_help",
+        "message": "game_fact_check needs a player_action or proposed resolution. Use it before narrating custom actions that introduce new biology, identity, family, legal, location, or backstory facts.",
+        "game_id": session.game_id,
+        "save_id": session.save_id,
+        "revision": state.get("revision").and_then(Value::as_u64),
+        "examples": [
+            {"player_action": "I remember the Tokyo promise."},
+            {"player_action": "其实我怀了你的孩子。"}
+        ],
+        "known_facts": state.get("facts").cloned().unwrap_or(Value::Null),
+    }))
+    .map_err(to_tool_error)
+}
+
 fn driver_help_result(
     driver: &deepseek_game::driver::DriverManifest,
 ) -> Result<ToolResult, ToolError> {
@@ -572,6 +1126,41 @@ fn driver_argument_help_result(
     .map_err(to_tool_error)
 }
 
+fn commit_help_result(
+    session: &crate::game::LoadedGameSession,
+    current_revision: u64,
+    player_input: Option<&str>,
+    resolution: Option<&str>,
+) -> Result<ToolResult, ToolError> {
+    let missing = [
+        ("player_input", player_input.is_none()),
+        ("resolution", resolution.is_none()),
+    ]
+    .into_iter()
+    .filter_map(|(field, missing)| missing.then_some(field))
+    .collect::<Vec<_>>();
+    ToolResult::json(&json!({
+        "kind": "commit_help",
+        "message": "game_commit_turn needs player_input and resolution before it can append a turn. expected_revision is inferred from the active save when omitted; state_patch may be omitted for an empty patch.",
+        "game_id": session.game_id,
+        "save_id": session.save_id,
+        "current_revision": current_revision,
+        "missing": missing,
+        "accepted_aliases": {
+            "player_input": ["player_action", "action", "input"],
+            "resolution": ["narration", "response"],
+            "state_patch": ["patch"]
+        },
+        "example": {
+            "expected_revision": current_revision,
+            "player_input": player_input.unwrap_or("<player action text>"),
+            "resolution": resolution.unwrap_or("<player-facing consequence>"),
+            "state_patch": {}
+        }
+    }))
+    .map_err(to_tool_error)
+}
+
 fn is_missing_script_parameter(error: &impl std::fmt::Display) -> bool {
     error
         .to_string()
@@ -588,16 +1177,6 @@ fn truncate_chars(raw: &str, max_bytes: usize) -> String {
         end -= 1;
     }
     format!("{}...", &raw[..end])
-}
-
-fn required_string(input: &Value, key: &str) -> Result<String, ToolError> {
-    input
-        .get(key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| ToolError::missing_field(key))
 }
 
 fn map_to_btree(map: &Map<String, Value>) -> BTreeMap<String, Value> {
@@ -628,6 +1207,7 @@ mod tests {
                 game_or_path: Some(root),
                 save: Some("default".to_string()),
                 developer_mode: false,
+                language: crate::game::GameLanguage::English,
             },
         )
         .expect("example game should load");
@@ -719,5 +1299,124 @@ mod tests {
 
         assert_eq!(content["kind"], "driver_help");
         assert!(content["available_functions"].as_array().unwrap().len() >= 3);
+    }
+
+    #[tokio::test]
+    async fn game_fact_check_blocks_configured_continuity_violation() {
+        let context = context_for_example("reconciliation-demo");
+        let result = GameFactCheckTool
+            .execute(json!({"player_action": "其实我怀了你的孩子。"}), &context)
+            .await
+            .expect("fact check should run");
+        let content: Value = serde_json::from_str(&result.content).expect("json result");
+
+        assert_eq!(content["kind"], "fact_check");
+        assert_eq!(content["allowed"], false);
+        assert_eq!(content["hard_block"], true);
+        assert_eq!(content["flags"], json!(["player_pregnancy_impossible"]));
+    }
+
+    #[test]
+    fn game_commit_turn_is_auto_approved_for_player_flow() {
+        assert_eq!(
+            GameCommitTurnTool.approval_requirement(),
+            ApprovalRequirement::Auto
+        );
+    }
+
+    #[tokio::test]
+    async fn game_commit_turn_partial_input_returns_guidance_instead_of_error() {
+        let context = context_for_example("reconciliation-demo");
+        let session = loaded_game(&context).expect("loaded game");
+        let save = deepseek_game::save::load_save(&session.saves_root, &session.save_id)
+            .expect("save should load");
+        let current_revision = save
+            .state
+            .get("revision")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        let result = GameCommitTurnTool
+            .execute(
+                json!({"player_action": "那你走吧，我懒得和你说了"}),
+                &context,
+            )
+            .await
+            .expect("partial commit should return guidance");
+        let content: Value = serde_json::from_str(&result.content).expect("json result");
+
+        assert_eq!(content["kind"], "commit_help");
+        assert_eq!(content["current_revision"], current_revision);
+        assert!(
+            content["missing"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("resolution"))
+        );
+    }
+
+    #[tokio::test]
+    async fn game_commit_turn_refuses_fact_blocked_resolution() {
+        let context = context_for_example("reconciliation-demo");
+        let result = GameCommitTurnTool
+            .execute(
+                json!({
+                    "player_input": "其实我怀了你的孩子。",
+                    "resolution": "你说自己怀了她的孩子，她停在雨里。",
+                    "state_patch": {}
+                }),
+                &context,
+            )
+            .await
+            .expect("fact-blocked commit should return a non-mutating result");
+        let content: Value = serde_json::from_str(&result.content).expect("json result");
+
+        assert_eq!(content["kind"], "commit_fact_block");
+        assert_eq!(content["fact_check"]["hard_block"], true);
+    }
+
+    #[test]
+    fn reconciliation_commit_normalization_updates_visible_state_for_violence() {
+        let context = context_for_example("reconciliation-demo");
+        let session = loaded_game(&context).expect("loaded game");
+        let save = deepseek_game::save::load_save(&session.saves_root, &session.save_id)
+            .expect("save should load");
+        let mut patch = json!({
+            "story": {
+                "branch": "pressure_failure",
+                "ended": true
+            }
+        });
+        let driver_results = BTreeMap::new();
+        let mut metadata = BTreeMap::new();
+        metadata.insert("action_skill".to_string(), json!("move"));
+        metadata.insert("action_subtype".to_string(), json!("violence"));
+
+        normalize_game_state_patch(
+            session,
+            &save.state,
+            "直接打她，打到她跪下",
+            "她没有回头。",
+            &driver_results,
+            &metadata,
+            &mut patch,
+        );
+
+        assert_eq!(
+            patch.pointer("/ui/reactions/active"),
+            Some(&json!("disgusted"))
+        );
+        assert_eq!(
+            patch.pointer("/player/stats/relationship_score"),
+            Some(&json!(-100))
+        );
+        assert_eq!(
+            patch.pointer("/story/active_node"),
+            Some(&json!("pressure_failure"))
+        );
+        assert_eq!(
+            patch.pointer("/story/nodes/pressure_failure/status"),
+            Some(&json!("failed"))
+        );
+        assert_eq!(patch.pointer("/world/flags/violence"), Some(&json!(true)));
     }
 }

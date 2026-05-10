@@ -17,6 +17,11 @@ root = "scripts"
 default_roles = ["state", "plot", "dialogue"]
 max_active = 3
 
+[subagents.templates]
+state = "agent_templates/state.md"
+plot = "agent_templates/plot.md"
+dialogue = "agent_templates/dialogue.md"
+
 [functions.score_action]
 script = "scripts/affection.star"
 function = "score_action"

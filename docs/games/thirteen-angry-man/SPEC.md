@@ -3,7 +3,7 @@
 ## Status
 
 This is the game-specific planning source for **Thirteen Angry Man**, a single
-deliberation drama built for the planned Game TUI framework.
+deliberation drama built for the Game TUI framework.
 
 The framework-level architecture remains in `docs/GAME_TUI_FRAMEWORK_SPEC.md`.
 This file owns only the plot guidance, gameplay rules, character behavior,
@@ -97,6 +97,48 @@ The game should avoid a single mandatory path. A critical node may be reached
 through several player actions if those actions are plausible. A player who
 misses a node can still continue, but later arguments become harder and some
 endings become more likely.
+
+## Music Direction
+
+The game should use music as part of the designer-authored pressure chamber.
+The player should not control the soundtrack. There is no player-facing music
+panel, cue picker, mute toggle, or volume control in normal play; music changes
+come from the cartridge's cue rules and the game agent's committed scene or
+ending state.
+
+Music should support rhythm, silence, heat, and moral pressure rather than
+announce answers. It must not reveal sealed evidence, signal the "correct"
+argument, or replace observable in-room behavior. When a cue would spoil a
+critical node, prefer room tone or silence.
+
+Cue principles:
+
+- Opening ballot: dry room tone or a low sustained bed that makes the first
+  majority feel heavy.
+- Lone doubt defense: a sparse, restrained pulse that protects deliberation
+  without making Juror 13 heroic.
+- Evidence pressure: subtle tension that rises when a contradiction becomes
+  discussable, not when the hidden answer exists off-screen.
+- Prejudice exposure: pull music back or drop to silence so the room's social
+  rejection carries the moment.
+- Final holdout collapse: minimal sound, with restraint more important than
+  melodrama.
+- Reasoned Result: quiet release that still respects the gravity of the case.
+- Weak Result: unresolved cadence; the legal result happened, but moral trust
+  did not fully recover.
+- Hung Room: suspended loop or fade-out, emphasizing exhaustion without closure.
+- Rushed Conviction: abrupt cold cutoff.
+- Procedural Failure / Coerced Acquittal: hard, uneasy ending sting.
+
+Implementation assumptions:
+
+- music assets are local cartridge files under `assets/music/`
+- cue IDs are declared in `game.toml` and may be selected by scene node,
+  pressure tier, release state, or ending
+- playback may use the optional `kew` adapter when available, but the cartridge
+  remains playable with no audio adapter
+- no copyrighted film score, remote URL, streaming provider, external branding,
+  telemetry, or user music-library search is part of this cartridge
 
 ## Fixed Background And Flexible Plot
 
@@ -436,8 +478,10 @@ Each player turn follows this sequence:
 6. Select only the needed NPC agents for this turn.
 7. Ask selected NPCs for scoped proposals.
 8. Resolve evidence, character, procedure, time, and vote effects.
-9. Render the player-facing result.
-10. Commit the state patch.
+9. Select the next designer-authored music cue, if scene pressure or ending
+   state changed.
+10. Render the player-facing result.
+11. Commit the state patch.
 
 The player-facing response should include only what Juror 13 can observe:
 speech, silence, body language, votes, exhibits currently discussed, and the
@@ -497,6 +541,7 @@ Runtime state should track:
 - procedure integrity
 - recent discussion topics
 - ending eligibility
+- intended active music cue, scene cue, and ending cue
 
 Fixed background should stay in content:
 
@@ -506,6 +551,7 @@ Fixed background should stay in content:
 - juror base profiles
 - critical node definitions
 - hint text
+- music cue definitions and local asset paths
 
 ## Driver Guidance
 
@@ -549,6 +595,7 @@ The cartridge maps this spec into runtime artifacts:
 | Reusable driver rules | `drivers/deliberation-drama/0.1.0/skills/driver/SKILL.md` |
 | Deterministic mechanics | `drivers/deliberation-drama/0.1.0/scripts/deliberation.star` |
 | Sub-agent role boundaries | `drivers/deliberation-drama/0.1.0/agent_templates/*.md` |
+| Designer-authored music cues | `game.toml` plus `assets/music/` |
 | Initial runtime state | `saves/default/STATE.json` |
 | Restartable agent roster | `saves/default/AGENTS.json` |
 
@@ -585,8 +632,13 @@ Near-term implementation gates:
 - Verify the save-locked driver version resolves exactly.
 - Verify the three driver functions are callable through `game_run_driver` and
   cannot mutate saves.
+- Verify local music cue declarations reject traversal, remote URLs, missing cue
+  IDs, and copyrighted-film-score placeholders.
+- Verify player mode hides music controls while developer mode can show adapter
+  diagnostics and committed cue state.
 - Add mock-LLM play-loop coverage for a turn that advances time, optionally
-  releases a hint, and commits one state patch.
+  releases a hint, changes a music cue when appropriate, and commits one state
+  patch.
 - Expand NPC skills or generated overlays only after the scoped pack boundary is
   enforced in code and tests.
 

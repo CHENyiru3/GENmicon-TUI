@@ -295,6 +295,9 @@ struct PlayArgs {
     /// Save id to load.
     #[arg(long)]
     save: Option<String>,
+    /// Player-facing language for this game launch: en or zh.
+    #[arg(long = "lang", visible_alias = "language", value_name = "en|zh")]
+    language: Option<String>,
     /// Enable Game Console developer presentation for this launch.
     #[arg(long)]
     dev: bool,
@@ -302,6 +305,37 @@ struct PlayArgs {
 
 fn join_prompt_parts(parts: &[String]) -> String {
     parts.join(" ")
+}
+
+fn resolve_game_language(value: Option<&str>) -> Result<game::GameLanguage> {
+    if let Some(value) = value {
+        return game::GameLanguage::parse(value)
+            .ok_or_else(|| anyhow!("unsupported game language '{value}'; use 'en' or 'zh'"));
+    }
+
+    if !io::stdin().is_terminal() {
+        return Ok(game::GameLanguage::English);
+    }
+
+    loop {
+        print!("Select game language: [1] English  [2] 中文 (default 1): ");
+        io::stdout().flush().context("failed to flush stdout")?;
+        let mut input = String::new();
+        io::stdin()
+            .read_line(&mut input)
+            .context("failed to read game language")?;
+        let trimmed = input.trim();
+        if trimmed.is_empty() || trimmed == "1" {
+            return Ok(game::GameLanguage::English);
+        }
+        if trimmed == "2" {
+            return Ok(game::GameLanguage::Chinese);
+        }
+        if let Some(language) = game::GameLanguage::parse(trimmed) {
+            return Ok(language);
+        }
+        println!("Unsupported language. Use 1/en/English or 2/zh/Chinese.");
+    }
 }
 
 #[derive(Args, Debug, Clone, Default)]
@@ -713,6 +747,7 @@ async fn main() -> Result<()> {
             }
             Commands::Play(args) => {
                 let config = load_config_from_cli(&cli)?;
+                let language = resolve_game_language(args.language.as_deref())?;
                 run_interactive(
                     &cli,
                     &config,
@@ -722,6 +757,7 @@ async fn main() -> Result<()> {
                         game_or_path: args.game_or_path,
                         save: args.save,
                         developer_mode: args.dev,
+                        language,
                     }),
                 )
                 .await

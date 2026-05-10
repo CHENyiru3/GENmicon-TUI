@@ -3,11 +3,11 @@
 use std::fmt::Write;
 
 use crate::network_policy::NetworkPolicy;
-use crate::skills::SkillRegistry;
 use crate::skills::install::{
     self, DEFAULT_MAX_SIZE_BYTES, DEFAULT_REGISTRY_URL, InstallOutcome, InstallSource,
     RegistryFetchResult, SkillSyncOutcome, SyncResult, UpdateResult,
 };
+use crate::skills::{Skill, SkillRegistry};
 use crate::tui::app::App;
 use crate::tui::history::HistoryCell;
 
@@ -15,6 +15,72 @@ use super::CommandResult;
 
 fn discover_visible_skills(app: &App) -> SkillRegistry {
     crate::skills::discover_for_workspace_and_dir(&app.workspace, &app.skills_dir)
+}
+
+fn discover_game_skills(app: &App) -> Vec<Skill> {
+    let Some(game_session) = app.game_session.as_ref() else {
+        return Vec::new();
+    };
+    let mut skills = Vec::new();
+    for dir in game_session.skill_directories() {
+        let registry = SkillRegistry::discover(&dir);
+        for skill in registry.list() {
+            if !skills
+                .iter()
+                .any(|existing: &Skill| existing.name == skill.name)
+            {
+                skills.push(skill.clone());
+            }
+        }
+    }
+    skills
+}
+
+fn visible_skill_list(app: &App) -> Vec<Skill> {
+    let registry = discover_visible_skills(app);
+    let mut skills: Vec<Skill> = registry.list().to_vec();
+    for skill in discover_game_skills(app) {
+        if !skills.iter().any(|existing| existing.name == skill.name) {
+            skills.push(skill);
+        }
+    }
+    skills
+}
+
+fn visible_skill_names(app: &App) -> Vec<String> {
+    let mut names: Vec<String> = visible_skill_list(app)
+        .into_iter()
+        .map(|skill| skill.name)
+        .collect();
+    if let Some(game_session) = app.game_session.as_ref() {
+        for shortcut in game_session.action_skill_shortcuts() {
+            if !names.iter().any(|name| name == &shortcut.trigger) {
+                names.push(shortcut.trigger);
+            }
+        }
+    }
+    names.sort();
+    names
+}
+
+fn find_visible_skill(app: &App, name: &str) -> Option<Skill> {
+    let registry = discover_visible_skills(app);
+    if let Some(skill) = registry.get(name) {
+        return Some(skill.clone());
+    }
+
+    let resolved_game_action = app
+        .game_session
+        .as_ref()
+        .and_then(|game_session| game_session.resolve_action_skill_name(name));
+    let game_skills = discover_game_skills(app);
+    if let Some(skill_name) = resolved_game_action.as_deref()
+        && let Some(skill) = game_skills.iter().find(|skill| skill.name == skill_name)
+    {
+        return Some(skill.clone());
+    }
+
+    game_skills.into_iter().find(|skill| skill.name == name)
 }
 
 fn render_skill_warnings(registry: &SkillRegistry) -> String {
@@ -49,9 +115,10 @@ pub fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
     }
     let skills_dir = app.skills_dir.clone();
     let registry = discover_visible_skills(app);
+    let skills = visible_skill_list(app);
     let warnings = render_skill_warnings(&registry);
 
-    if registry.is_empty() {
+    if skills.is_empty() {
         let msg = format!(
             "No skills found.\n\n\
              Skills location: {}\n\n\
@@ -70,9 +137,9 @@ pub fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
         return CommandResult::message(msg);
     }
 
-    let mut output = format!("Available skills ({}):\n", registry.len());
+    let mut output = format!("Available skills ({}):\n", skills.len());
     output.push_str("─────────────────────────────\n");
-    for skill in registry.list() {
+    for skill in &skills {
         let _ = writeln!(output, "  /{} - {}", skill.name, skill.description);
     }
     let _ = write!(
@@ -90,8 +157,7 @@ pub fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
 /// Try to run a skill by exact name (used for unified slash-command namespace, #435).
 /// Returns None when no skill with that name exists, so the caller can try other sources.
 pub fn run_skill_by_name(app: &mut App, name: &str, _arg: Option<&str>) -> Option<CommandResult> {
-    let registry = discover_visible_skills(app);
-    if registry.get(name).is_some() {
+    if find_visible_skill(app, name).is_some() {
         Some(activate_skill(app, name))
     } else {
         None
@@ -142,9 +208,7 @@ fn activate_skill(app: &mut App, name: &str) -> CommandResult {
     // `/skill new` is a friendly alias for `/skill skill-creator`.
     let name = if name == "new" { "skill-creator" } else { name };
 
-    let registry = discover_visible_skills(app);
-
-    if let Some(skill) = registry.get(name) {
+    if let Some(skill) = find_visible_skill(app, name) {
         let instruction = format!(
             "You are now using a skill. Follow these instructions:\n\n# Skill: {}\n\n{}\n\n---\n\nNow respond to the user's request following the above skill instructions.",
             skill.name, skill.body
@@ -154,14 +218,33 @@ fn activate_skill(app: &mut App, name: &str) -> CommandResult {
             content: format!("Activated skill: {}\n\n{}", skill.name, skill.description),
         });
 
+        let game_action = app.game_session.as_ref().and_then(|game_session| {
+            game_session
+                .action_skill_shortcuts()
+                .into_iter()
+                .find(|shortcut| shortcut.skill_name == skill.name || shortcut.trigger == name)
+        });
         app.active_skill = Some(instruction);
-
-        CommandResult::message(format!(
-            "Skill '{}' activated.\n\nDescription: {}\n\nType your request and the skill instructions will be applied.",
-            skill.name, skill.description
-        ))
+        app.active_skill_name = Some(
+            game_action
+                .as_ref()
+                .map(|action| action.trigger.clone())
+                .unwrap_or_else(|| skill.name.clone()),
+        );
+        if let Some(action) = game_action {
+            CommandResult::message(format!(
+                "Action skill '{}' active via '{}'.\n\nDescription: {}\n\nType the action content now; the next message will be resolved as this action skill.",
+                action.label, skill.name, skill.description
+            ))
+        } else {
+            CommandResult::message(format!(
+                "Skill '{}' activated.\n\nDescription: {}\n\nType your request and the skill instructions will be applied.",
+                skill.name, skill.description
+            ))
+        }
     } else {
-        let available: Vec<String> = registry.list().iter().map(|s| s.name.clone()).collect();
+        let available = visible_skill_names(app);
+        let registry = discover_visible_skills(app);
         let warnings = render_skill_warnings(&registry);
 
         if available.is_empty() {
@@ -544,6 +627,23 @@ mod tests {
         std::fs::write(skill_dir.join("SKILL.md"), skill_content).unwrap();
     }
 
+    fn install_reconciliation_game_session(app: &mut App) {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("examples/games/reconciliation-demo");
+        let session = crate::game::load_game_session(
+            std::path::Path::new("."),
+            crate::game::GameLaunchOptions {
+                game_or_path: Some(root),
+                save: Some("default".to_string()),
+                developer_mode: false,
+                language: crate::game::GameLanguage::English,
+            },
+        )
+        .expect("demo game should load");
+        app.install_game_session(session);
+    }
+
     #[test]
     fn test_list_skills_empty_directory() {
         let tmpdir = TempDir::new().unwrap();
@@ -632,6 +732,36 @@ mod tests {
         let msg = result.message.unwrap();
         assert!(msg.contains("No active Game Console session"), "got: {msg}");
         assert!(msg.contains("/play"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_game_action_skill_shortcut_activates_backing_skill() {
+        let tmpdir = TempDir::new().unwrap();
+        let _home = IsolatedHome::new(&tmpdir);
+        let mut app = create_test_app_with_tmpdir(&tmpdir);
+        install_reconciliation_game_session(&mut app);
+
+        assert!(
+            app.cached_skills.iter().any(
+                |(name, description)| name == "chat" && description.starts_with("Game action:")
+            ),
+            "game action shortcut missing from cached skills: {:?}",
+            app.cached_skills
+        );
+
+        let result = run_skill(&mut app, Some("chat"));
+        let msg = result.message.unwrap();
+        assert!(
+            msg.contains("Action skill 'Chat' active via 'game-action-chat'"),
+            "got: {msg}"
+        );
+        assert_eq!(app.active_skill_name.as_deref(), Some("chat"));
+        assert!(
+            app.active_skill
+                .as_deref()
+                .is_some_and(|skill| skill.contains("# Chat Action")),
+            "chat action skill body was not activated"
+        );
     }
 
     #[test]

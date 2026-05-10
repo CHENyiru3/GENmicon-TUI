@@ -40,6 +40,9 @@ Reliability rules:
   in-world behavior with visible consequences. Do not answer as a safety
   moderator or pause the game; show how the characters react and keep the next
   action playable.
+- If the player introduces a new biology, identity, family, legal, location, or
+  backstory fact, run the cartridge's fact gate first. Do not narrate blocked
+  claims as true; ask for revision or treat them as false/absurd in-world.
 - If a deterministic driver call fails, do not invent a numeric result. Resolve
   the narrative conservatively and commit metadata noting the missing driver
   result only when the game can still continue.

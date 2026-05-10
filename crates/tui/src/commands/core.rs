@@ -263,7 +263,7 @@ pub fn home_dashboard(app: &mut App) -> CommandResult {
     }
 
     // Active skill
-    if let Some(skill) = &app.active_skill {
+    if let Some(skill) = app.active_skill_name.as_ref().or(app.active_skill.as_ref()) {
         let _ = writeln!(
             stats,
             "{}      {} (active)",

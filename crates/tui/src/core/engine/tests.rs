@@ -495,6 +495,7 @@ fn game_player_profile_exposes_only_game_safe_tools() {
             crate::game::GameSessionNotice {
                 message: "test game".to_string(),
                 developer_mode: false,
+                language: crate::game::GameLanguage::English,
             },
         )),
         ..Default::default()
@@ -513,6 +514,7 @@ fn game_player_profile_exposes_only_game_safe_tools() {
         "game_render",
         "game_playbook",
         "game_lookup",
+        "game_fact_check",
         "game_run_driver",
         "game_commit_turn",
         "load_skill",

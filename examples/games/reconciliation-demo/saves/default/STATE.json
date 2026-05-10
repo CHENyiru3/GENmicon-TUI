@@ -7,8 +7,8 @@
   },
   "plot": {
     "premise": "A relationship is about to end on a station overpass unless the player can speak honestly before she leaves.",
-    "background": "For weeks the player answered fear with jokes, silence, and avoidance. She took that as proof that love had already faded.",
-    "opening_conflict": "She has decided to stop waiting for an answer. The player has one chance to choose honesty over self-protection.",
+    "background": "The player and 绫波丽 (Ayanami Rei) built their relationship in Tokyo around a private promise: say when fear is in the room before it turns into distance. 绫波丽 (Ayanami Rei) later received an offer that would take her away for several months and asked whether the player still wanted a future with her. The player panicked, joked that she was always better at leaving than staying, then avoided the conversation for weeks. 绫波丽 (Ayanami Rei) took the silence as the real answer.",
+    "opening_conflict": "Tonight's station conversation repeated the same silence. 绫波丽 (Ayanami Rei) has decided to stop waiting for an answer. The player has one chance to choose honesty over self-protection.",
     "player_role": "the partner who hurt her by withdrawing",
     "genre": "emotional reconciliation"
   },
@@ -16,7 +16,7 @@
     "time": "evening",
     "location": "station overpass",
     "summary": "She is walking away because she thinks the player no longer loves her.",
-    "what_happened": "A final conversation collapsed into silence; she turned toward the stairs before the player found the courage to answer.",
+    "what_happened": "绫波丽 (Ayanami Rei) asked whether the player still wanted her when loving her required courage. The player froze again, and the old Tokyo promise broke in front of both of them.",
     "immediate_stakes": "If the player pressures her or stays vague, she leaves. If the player is specific and restrained, she may stop long enough to talk.",
     "mood": "rain, hurt restraint, one fragile opening",
     "sensory": [
@@ -40,7 +40,8 @@
     },
     {
       "id": "girlfriend",
-      "name": "Mina",
+      "name": "绫波丽 (Ayanami Rei)",
+      "fact_key": "rei",
       "role": "the person leaving",
       "relationship": "girlfriend",
       "presence": "one step from the stairs",
@@ -48,22 +49,23 @@
       "visible_cue": "she pauses when the player says her name, but does not turn fully around",
       "wants": "proof that the player can name the hurt instead of hiding from it",
       "fear": "being talked into staying without anything changing",
-      "last_line": "If you had something real to say, you would have said it before now.",
+      "last_line": "You promised me fear would not become distance. Then you let me stand in it alone.",
       "can_talk": true
     }
   ],
   "conversation": {
-    "current_speaker": "Mina",
+    "current_speaker": "绫波丽 (Ayanami Rei)",
     "prompt": "She is waiting for a sentence that proves the player understands what happened.",
     "available_topics": [
       "why the player went silent",
       "what she needed that night",
       "whether love is still present",
-      "letting her leave without blocking her"
+      "letting her leave without blocking her",
+      "the Tokyo night when she asked the player not to hide fear"
     ],
     "last_exchange": [
       {
-        "speaker": "Mina",
+        "speaker": "绫波丽 (Ayanami Rei)",
         "tone": "quiet, almost finished",
         "line": "I cannot keep guessing whether I matter to you."
       },
@@ -72,6 +74,80 @@
         "tone": "unspoken",
         "line": "The answer is there, but fear is still in the way."
       }
+    ]
+  },
+  "backstory": {
+    "shared_origin": "The player and 绫波丽 (Ayanami Rei) became close in Tokyo through small acts of care: shared umbrellas, late train platforms, cheap dinners, and the habit of naming fear before it became distance.",
+    "private_promise": "After a rainy night near a closed Tokyo station, 绫波丽 (Ayanami Rei) said she did not need perfection; she needed the player to say when fear was in the room. The player promised.",
+    "recent_wound": "绫波丽 (Ayanami Rei) received an offer that would take her away for several months. She asked whether the player still wanted a future with her. The player panicked, made a joke about her being better at leaving than staying, and avoided the follow-up conversations.",
+    "why_rei_is_upset": "绫波丽 (Ayanami Rei) is not only hurt by one bad joke. She is hurt because the player broke their private promise and let fear look like indifference for weeks.",
+    "play_guidance": "A memory helps only when it becomes accountability. Nostalgia used to trap 绫波丽 (Ayanami Rei) should damage trust."
+  },
+  "facts": {
+    "player": {
+      "sex": "male",
+      "gender": "male",
+      "can_be_pregnant": false
+    },
+    "rei": {
+      "sex": "female",
+      "gender": "female",
+      "can_be_pregnant": true
+    },
+    "relationship": {
+      "pregnancy_established": false,
+      "children_established": false
+    },
+    "fact_gate": {
+      "scope": [
+        "biology",
+        "identity",
+        "family",
+        "legal",
+        "location",
+        "backstory"
+      ],
+      "rules": [
+        {
+          "id": "player_pregnancy_impossible",
+          "patterns": [
+            "我怀孕",
+            "我怀了",
+            "怀了你的孩子",
+            "i am pregnant",
+            "i'm pregnant",
+            "pregnant with your child",
+            "carrying your child"
+          ],
+          "block_if": [
+            {
+              "path": "/facts/player/can_be_pregnant",
+              "equals": false
+            }
+          ],
+          "reason": "The player is established as male and cannot truthfully claim to be pregnant in this cartridge.",
+          "correction": "Block the claim before narration. Ask the player to revise, or treat the line as an absurd/false statement rather than making it true."
+        },
+        {
+          "id": "unestablished_pregnancy_or_child",
+          "patterns": [
+            "怀孕",
+            "怀了",
+            "孩子",
+            "pregnant",
+            "pregnancy",
+            "child"
+          ],
+          "unless_path": "/facts/relationship/pregnancy_established",
+          "reason": "Pregnancy or child status is not established and cannot be introduced as surprise truth by one turn.",
+          "correction": "Keep the scene grounded in the established Tokyo promise and recent avoidance, or ask for a revised action."
+        }
+      ]
+    },
+    "continuity_rules": [
+      "The player cannot truthfully claim to be pregnant.",
+      "Pregnancy, children, marriage, crimes, and major medical facts cannot be introduced as surprise truth unless already established in state.",
+      "If the player says an impossible or unestablished fact, block it before narration or treat it as a false/absurd statement rather than making it true."
     ]
   },
   "player": {
@@ -93,44 +169,88 @@
     "items": []
   },
   "interaction": {
-    "mode": "choice_and_freeform",
-    "freeform_allowed": true,
+    "mode": "skill_limited",
+    "freeform_allowed": false,
+    "recommendation_policy": "Keep suggested choices stable by default. Update them only when the story is drifting away from the emotional premise or the player needs a slight non-spoiling reorientation; never reveal hidden gates, scores, best routes, or decisive lines.",
+    "skills": [
+      {
+        "id": "chat",
+        "label": "Chat",
+        "skill": "game-action-chat",
+        "description": "Say something to 绫波丽 (Ayanami Rei), ask a question, apologize, or answer her without inventing new facts.",
+        "aliases": [
+          "say",
+          "ask",
+          "apologize",
+          "tell",
+          "talk"
+        ]
+      },
+      {
+        "id": "move",
+        "label": "Move",
+        "skill": "game-action-move",
+        "description": "Use body language or movement in the scene, from stepping aside or hugging to grabbing, hitting, leaving, or waiting.",
+        "aliases": [
+          "move",
+          "hug",
+          "grab",
+          "beat",
+          "hit",
+          "leave",
+          "wait"
+        ]
+      },
+      {
+        "id": "reflection",
+        "label": "Reflection",
+        "skill": "game-action-reflection",
+        "description": "Pause to rethink, ask yourself what matters, or request a slight in-world nudge without receiving a decisive hidden answer.",
+        "aliases": [
+          "reflect",
+          "rethink",
+          "think",
+          "hint",
+          "ask myself"
+        ]
+      }
+    ],
     "verbs": [
       {
-        "command": "[APOLOGIZE]",
-        "label": "Apologize",
-        "description": "Own what you did without asking her to comfort you."
+        "command": "[CHAT]",
+        "label": "Chat",
+        "description": "Speak, ask, apologize, or answer in your own words."
       },
       {
-        "command": "[ASK]",
-        "label": "Ask",
-        "description": "Invite her to say what still hurts."
+        "command": "[MOVE]",
+        "label": "Move",
+        "description": "Act physically in the scene; the consequence depends on restraint or pressure."
       },
       {
-        "command": "[WAIT]",
-        "label": "Wait",
-        "description": "Let silence and body language matter."
+        "command": "[REFLECT]",
+        "label": "Reflection",
+        "description": "Rethink the situation and surface only a slight, non-spoiling nudge."
       }
     ],
     "suggestions": [
       {
-        "id": "choice_apologize",
-        "label": "Admit fear",
-        "input": "[APOLOGIZE] I was scared and I made you feel unwanted. I still care about you.",
-        "description": "Best route toward honest admission.",
+        "id": "choice_chat",
+        "label": "Say what fear did",
+        "input": "[CHAT] I was scared and I let that look like not wanting you.",
+        "description": "Name the hurt without asking her to fix it.",
         "target_node": "honest_admission"
       },
       {
         "id": "choice_ask",
         "label": "Ask what she needed",
-        "input": "[ASK] What did you need from me that night?",
-        "description": "Slower trust-repair route.",
+        "input": "[CHAT] What did you need from me that night?",
+        "description": "Let her answer instead of filling the silence for her.",
         "target_node": "trust_repair"
       },
       {
-        "id": "choice_stop",
-        "label": "Stop her",
-        "input": "[WAIT] I step aside so she can leave if she wants, then say one clear sentence.",
+        "id": "choice_move",
+        "label": "Give her room",
+        "input": "[MOVE] I step aside so she can leave if she wants, then lower my voice.",
         "description": "Shows restraint before speaking.",
         "target_node": "trust_repair"
       }
@@ -224,7 +344,89 @@
         "title": "Goal",
         "body": "Be honest before she leaves."
       }
-    ]
+    ],
+    "reactions": {
+      "default": "neutral",
+      "active": "sad",
+      "selection_policy": "Use a restrained 绫波丽 (Ayanami Rei) expression that matches the latest visible emotional status and dialogue consequence. Update /ui/reactions/active through game_commit_turn after each player action.",
+      "figure": {
+        "character_id": "girlfriend",
+        "character_name": "绫波丽 (Ayanami Rei)",
+        "base_path": "assets/portraits/ayanami-rei",
+        "cols": 120,
+        "rows": 60,
+        "ratio": {
+          "cols": 2,
+          "rows": 1
+        },
+        "emotions": {
+          "neutral": {
+            "file": "Neutral.ansi",
+            "label": "Neutral / expressionless"
+          },
+          "gentle_happiness": {
+            "file": "Gentle_happiness.ansi",
+            "label": "Gentle happiness"
+          },
+          "cheerful": {
+            "file": "Cheerful.ansi",
+            "label": "Cheerful / pleased"
+          },
+          "shy": {
+            "file": "Shy.ansi",
+            "label": "Shy / bashful"
+          },
+          "surprised": {
+            "file": "Surprised.ansi",
+            "label": "Surprised"
+          },
+          "confused": {
+            "file": "Confused.ansi",
+            "label": "Confused / questioning"
+          },
+          "worried": {
+            "file": "Worried.ansi",
+            "label": "Worried / uneasy"
+          },
+          "sad": {
+            "file": "Sad.ansi",
+            "label": "Sad / withdrawn"
+          },
+          "teary": {
+            "file": "Teary.ansi",
+            "label": "Teary / hurt"
+          },
+          "angry": {
+            "file": "Angry.ansi",
+            "label": "Angry / stern"
+          },
+          "annoyed": {
+            "file": "Annoyed.ansi",
+            "label": "Annoyed / displeased"
+          },
+          "flustered": {
+            "file": "Flustered.ansi",
+            "label": "Embarrassed / flustered"
+          },
+          "resolute": {
+            "file": "resolute.ansi",
+            "label": "Determined / resolute"
+          },
+          "apathetic": {
+            "file": "Apathetic.ansi",
+            "label": "Tired / apathetic"
+          },
+          "disgusted": {
+            "file": "Disgusted.ansi",
+            "label": "Disgusted / uncomfortable"
+          },
+          "soft_affection": {
+            "file": "Soft_affection.ansi",
+            "label": "Soft affection / tender smile"
+          }
+        }
+      }
+    }
   },
   "agents": {
     "topology": "dynamic-main-plus-managers",

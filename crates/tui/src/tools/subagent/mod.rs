@@ -70,6 +70,7 @@ const COMPLETED_AGENT_RETENTION: Duration = Duration::from_secs(60 * 60);
 const SUBAGENT_STATE_SCHEMA_VERSION: u32 = 1;
 const SUBAGENT_STATE_FILE: &str = "subagents.v1.json";
 const SUBAGENT_RESTART_REASON: &str = "Interrupted by process restart";
+const GAME_PACK_INPUT_KEYS: &[&str] = &["pack", "agent_pack", "game_role", "game_agent"];
 
 const VALID_SUBAGENT_TYPES: &str = "general, explore, plan, review, implementer, verifier, custom, \
      worker, explorer, awaiter, default, implement, builder, verify, validator, tester";
@@ -1581,6 +1582,13 @@ impl ToolSpec for AgentSpawnTool {
     }
 
     fn description(&self) -> &'static str {
+        if self.name == "game_agent_spawn" {
+            return "Spawn a game-scoped sub-agent from a declared agent pack. Pass `pack` \
+                    or `role` as a generated pack role such as `dialogue_girlfriend`; the \
+                    child receives only game-safe tools and returns a proposal for the main \
+                    game session to validate, narrate, and commit. Use `game_agent_wait` \
+                    or `game_agent_result` to retrieve the proposal.";
+        }
         "Spawn a background sub-agent for a focused task. Returns an agent_id immediately; \
          follow with agent_result to retrieve the final result. Default cap of 10 concurrent \
          sub-agents (configurable via `[subagents].max_concurrent`); each is a full sub-agent \
@@ -1589,7 +1597,7 @@ impl ToolSpec for AgentSpawnTool {
     }
 
     fn input_schema(&self) -> Value {
-        json!({
+        let mut schema = json!({
             "type": "object",
             "properties": {
                 "prompt": {
@@ -1653,10 +1661,45 @@ impl ToolSpec for AgentSpawnTool {
                     "description": "When true, inherit the parent's system prompt and conversation prefix before appending this task. This preserves DeepSeek prefix-cache reuse and gives the child full parent context. Defaults to false for independent exploration."
                 }
             }
-        })
+        });
+        if self.name == "game_agent_spawn"
+            && let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut)
+        {
+            properties.insert(
+                "pack".to_string(),
+                json!({
+                    "type": "string",
+                    "description": "Generated game agent pack role, such as dialogue_girlfriend. Required when declared packs are available."
+                }),
+            );
+            properties.insert(
+                "agent_pack".to_string(),
+                json!({
+                    "type": "string",
+                    "description": "Alias for pack."
+                }),
+            );
+            properties.insert(
+                "game_role".to_string(),
+                json!({
+                    "type": "string",
+                    "description": "Alias for pack."
+                }),
+            );
+            if let Some(role) = properties.get_mut("role").and_then(Value::as_object_mut) {
+                role.insert(
+                    "description".to_string(),
+                    json!("Game agent pack role such as dialogue_girlfriend; generic worker/explorer aliases are not used for player-mode game packs."),
+                );
+            }
+        }
+        schema
     }
 
     fn capabilities(&self) -> Vec<ToolCapability> {
+        if self.name == "game_agent_spawn" {
+            return vec![ToolCapability::ReadOnly, ToolCapability::Sandboxable];
+        }
         vec![
             ToolCapability::ExecutesCode,
             ToolCapability::RequiresApproval,
@@ -1664,17 +1707,20 @@ impl ToolSpec for AgentSpawnTool {
     }
 
     fn approval_requirement(&self) -> ApprovalRequirement {
+        if self.name == "game_agent_spawn" {
+            return ApprovalRequirement::Auto;
+        }
         ApprovalRequirement::Required
     }
 
-    async fn execute(&self, input: Value, _context: &ToolContext) -> Result<ToolResult, ToolError> {
-        let mut spawn_request = parse_spawn_request(&input)?;
+    async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
+        let mut spawn_request = if self.name == "game_agent_spawn" {
+            parse_spawn_request_for_surface(&input, SpawnSurface::Game)?
+        } else {
+            parse_spawn_request(&input)?
+        };
         if self.name == "game_agent_spawn" {
-            spawn_request.allowed_tools = Some(game_safe_subagent_tools());
-            spawn_request.prompt = format!(
-                "You are a game-scoped processor. Use only native game tools and return a proposal; do not commit state unless explicitly asked.\n\n{}",
-                spawn_request.prompt
-            );
+            prepare_game_spawn_request(&mut spawn_request, &input, context)?;
         }
 
         // Depth cap: reject before locking the manager so we don't introduce
@@ -1844,23 +1890,32 @@ impl ToolSpec for AgentSpawnTool {
 /// Tool to fetch a sub-agent's result.
 pub struct AgentResultTool {
     manager: SharedSubAgentManager,
+    name: &'static str,
 }
 
 impl AgentResultTool {
     /// Create a new result tool.
     #[must_use]
     pub fn new(manager: SharedSubAgentManager) -> Self {
-        Self { manager }
+        Self::with_name(manager, "agent_result")
+    }
+
+    #[must_use]
+    pub fn with_name(manager: SharedSubAgentManager, name: &'static str) -> Self {
+        Self { manager, name }
     }
 }
 
 #[async_trait]
 impl ToolSpec for AgentResultTool {
     fn name(&self) -> &'static str {
-        "agent_result"
+        self.name
     }
 
     fn description(&self) -> &'static str {
+        if self.name == "game_agent_result" {
+            return "Get the latest status or final proposal for a game-scoped sub-agent. Set `block: true` to wait until the agent reaches a terminal state.";
+        }
         "Get the latest status or final result for a sub-agent. Set `block: true` to wait until the \
          agent reaches a terminal state (respects `timeout_ms`)."
     }
@@ -1871,7 +1926,7 @@ impl ToolSpec for AgentResultTool {
             "properties": {
                 "agent_id": {
                     "type": "string",
-                    "description": "ID returned by agent_spawn"
+                    "description": if self.name == "game_agent_result" { "ID returned by game_agent_spawn" } else { "ID returned by agent_spawn" }
                 },
                 "id": {
                     "type": "string",
@@ -1933,23 +1988,32 @@ impl ToolSpec for AgentResultTool {
 /// Tool to cancel a sub-agent.
 pub struct AgentCancelTool {
     manager: SharedSubAgentManager,
+    name: &'static str,
 }
 
 impl AgentCancelTool {
     /// Create a new cancel tool.
     #[must_use]
     pub fn new(manager: SharedSubAgentManager) -> Self {
-        Self { manager }
+        Self::with_name(manager, "agent_cancel")
+    }
+
+    #[must_use]
+    pub fn with_name(manager: SharedSubAgentManager, name: &'static str) -> Self {
+        Self { manager, name }
     }
 }
 
 #[async_trait]
 impl ToolSpec for AgentCancelTool {
     fn name(&self) -> &'static str {
-        "agent_cancel"
+        self.name
     }
 
     fn description(&self) -> &'static str {
+        if self.name == "game_agent_cancel" {
+            return "Cancel a running game-scoped sub-agent. Returns the final snapshot with the cancelled status.";
+        }
         "Cancel a running sub-agent. Returns the final snapshot with the cancelled status."
     }
 
@@ -1959,7 +2023,7 @@ impl ToolSpec for AgentCancelTool {
             "properties": {
                 "agent_id": {
                     "type": "string",
-                    "description": "ID returned by agent_spawn"
+                    "description": if self.name == "game_agent_cancel" { "ID returned by game_agent_spawn" } else { "ID returned by agent_spawn" }
                 }
             },
             "required": ["agent_id"]
@@ -1967,6 +2031,9 @@ impl ToolSpec for AgentCancelTool {
     }
 
     fn capabilities(&self) -> Vec<ToolCapability> {
+        if self.name == "game_agent_cancel" {
+            return vec![ToolCapability::ReadOnly, ToolCapability::Sandboxable];
+        }
         vec![
             ToolCapability::ExecutesCode,
             ToolCapability::RequiresApproval,
@@ -1974,6 +2041,9 @@ impl ToolSpec for AgentCancelTool {
     }
 
     fn approval_requirement(&self) -> ApprovalRequirement {
+        if self.name == "game_agent_cancel" {
+            return ApprovalRequirement::Auto;
+        }
         ApprovalRequirement::Required
     }
 
@@ -2099,6 +2169,9 @@ impl ToolSpec for AgentResumeTool {
     }
 
     fn description(&self) -> &'static str {
+        if self.name == "game_agent_resume" {
+            return "Resume a previously closed or completed game-scoped sub-agent by restarting its assignment.";
+        }
         "Resume a previously closed or completed sub-agent by restarting its assignment."
     }
 
@@ -2119,6 +2192,9 @@ impl ToolSpec for AgentResumeTool {
     }
 
     fn capabilities(&self) -> Vec<ToolCapability> {
+        if self.name == "game_agent_resume" {
+            return vec![ToolCapability::ReadOnly, ToolCapability::Sandboxable];
+        }
         vec![
             ToolCapability::ExecutesCode,
             ToolCapability::RequiresApproval,
@@ -2126,6 +2202,9 @@ impl ToolSpec for AgentResumeTool {
     }
 
     fn approval_requirement(&self) -> ApprovalRequirement {
+        if self.name == "game_agent_resume" {
+            return ApprovalRequirement::Auto;
+        }
         ApprovalRequirement::Required
     }
 
@@ -2163,6 +2242,9 @@ impl ToolSpec for AgentListTool {
     }
 
     fn description(&self) -> &'static str {
+        if self.name == "game_agent_list" {
+            return "List game-scoped sub-agents from the current session with their status, pack role, assignment, steps, and duration.";
+        }
         "List sub-agents from the current session with their status, type, assignment, steps, \
          and duration. Pass `include_archived=true` to also see agents that were spawned in a \
          prior session (e.g. before the TUI restarted) and persisted on disk; those carry \
@@ -2219,6 +2301,9 @@ impl ToolSpec for AgentSendInputTool {
     }
 
     fn description(&self) -> &'static str {
+        if self.name == "game_agent_send" {
+            return "Send input to a running game-scoped sub-agent. Returns the agent's current snapshot after delivery.";
+        }
         "Send input to a running sub-agent. Returns the agent's current snapshot after delivery."
     }
 
@@ -2315,6 +2400,9 @@ impl ToolSpec for AgentAssignTool {
     }
 
     fn description(&self) -> &'static str {
+        if self.name == "game_agent_assign" {
+            return "Update a game-scoped sub-agent's assignment and optionally deliver an immediate coordinator note. Returns the agent's current snapshot.";
+        }
         "Update a sub-agent's assignment (objective, role) and optionally deliver an immediate \
          coordinator note. The update is delivered as a high-priority message when `interrupt` is \
          true (the default). Returns the agent's current snapshot."
@@ -2409,6 +2497,9 @@ impl ToolSpec for AgentWaitTool {
     }
 
     fn description(&self) -> &'static str {
+        if self.name == "game_agent_wait" {
+            return "Wait for one or more game-scoped sub-agents to reach a terminal status and return their proposals.";
+        }
         "Wait for one or more sub-agents to reach a terminal status. Use `wait_mode: \"all\"` to block \
          until every listed agent finishes, or `wait_mode: \"any\"` (default) to return as soon as \
          one finishes. When no ids are given, waits on all currently running sub-agents."
@@ -2643,27 +2734,41 @@ impl ToolSpec for DelegateToAgentTool {
 
 /// Build the system prompt for a sub-agent.
 ///
-/// Starts with the per-type prompt (`SubAgentType::system_prompt`) and
-/// appends a one-line role overlay when `assignment.role` is set. The
-/// full role library — TOML overlays from `~/.deepseek/roles/`, the
-/// `/roles` slash command, model overrides per role — lands in 0.6.7.
-/// For 0.6.6 we just don't drop the role on the floor: the model sees
-/// "You are operating in the role of `{name}`." as a final line so its
-/// behavior reflects the user's choice.
+/// Starts with the per-type prompt (`SubAgentType::system_prompt`) and inserts
+/// a runtime overlay immediately before the shared output contract. Keeping the
+/// overlay above the contract preserves the final-report instructions as the
+/// last thing the child reads.
 fn build_subagent_system_prompt(
     agent_type: &SubAgentType,
     assignment: &SubAgentAssignment,
 ) -> String {
     let base = agent_type.system_prompt();
-    match assignment.role.as_deref() {
-        Some(role) if !role.trim().is_empty() => {
-            format!(
-                "{base}\n\nYou are operating in the role of `{}`.",
-                role.trim()
-            )
-        }
-        _ => base,
+    let overlay = subagent_runtime_overlay(assignment.role.as_deref());
+    if let Some(index) = base.find(SUBAGENT_OUTPUT_CONTRACT_HEADING) {
+        let (before, after) = base.split_at(index);
+        format!("{}\n\n{}\n\n{}", before.trim_end(), overlay, after)
+    } else {
+        format!("{base}\n\n{overlay}")
     }
+}
+
+const SUBAGENT_OUTPUT_CONTRACT_HEADING: &str = "## Output Contract (Mandatory)";
+
+fn subagent_runtime_overlay(role: Option<&str>) -> String {
+    let role_line = role
+        .map(str::trim)
+        .filter(|role| !role.is_empty())
+        .map(|role| format!("- Runtime role: `{role}`. Treat this as routing context, not permission to expand scope."))
+        .unwrap_or_else(|| "- Runtime role: `default`.".to_string());
+
+    format!(
+        "Runtime contract:\n\
+         - You are one child in a larger parent-run. Optimize for a concise handoff the parent can audit.\n\
+         - Work only on the assigned objective. Put adjacent discoveries in RISKS or BLOCKERS instead of pursuing them.\n\
+         - Do not ask the user or parent to choose between obvious next steps; proceed until done, partially done, or blocked.\n\
+         {role_line}\n\
+         - Your final answer is consumed by tooling and by the parent model. Follow the output contract exactly."
+    )
 }
 
 fn subagent_request_system_prompt(
@@ -3380,7 +3485,20 @@ fn parse_items_text(input: &Value, key: &str) -> Result<Option<String>, ToolErro
     Ok(Some(lines.join("\n")))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpawnSurface {
+    Generic,
+    Game,
+}
+
 fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
+    parse_spawn_request_for_surface(input, SpawnSurface::Generic)
+}
+
+fn parse_spawn_request_for_surface(
+    input: &Value,
+    surface: SpawnSurface,
+) -> Result<SpawnRequest, ToolError> {
     let prompt = parse_text_or_items(
         input,
         &["prompt", "message", "objective"],
@@ -3388,8 +3506,29 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
         "prompt",
     )?;
 
-    let type_input = optional_input_str(input, &["type", "agent_type", "agent_name"]);
-    let role_input = optional_input_str(input, &["role", "agent_role"]);
+    let raw_type_input = optional_input_str(input, &["type", "agent_type", "agent_name"]);
+    let raw_role_input = optional_input_str(input, &["role", "agent_role"]);
+    let raw_pack_input = if surface == SpawnSurface::Game {
+        optional_input_str(input, GAME_PACK_INPUT_KEYS)
+    } else {
+        None
+    };
+
+    let type_is_pack = surface == SpawnSurface::Game
+        && raw_pack_input.is_none()
+        && raw_type_input.is_some_and(|kind| SubAgentType::from_str(kind).is_none());
+    let role_is_pack = surface == SpawnSurface::Game
+        && raw_pack_input.is_none()
+        && !type_is_pack
+        && raw_role_input.is_some_and(|role| {
+            SubAgentType::from_str(role).is_none() && normalize_role_alias(role).is_none()
+        });
+
+    let game_pack = raw_pack_input
+        .or_else(|| type_is_pack.then_some(raw_type_input).flatten())
+        .or_else(|| role_is_pack.then_some(raw_role_input).flatten());
+    let type_input = if type_is_pack { None } else { raw_type_input };
+    let role_input = if role_is_pack { None } else { raw_role_input };
 
     let parsed_type = type_input
         .map(|kind| {
@@ -3431,10 +3570,12 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
         )));
     }
 
-    let role = role_input
-        .and_then(normalize_role_alias)
-        .or_else(|| type_input.and_then(normalize_role_alias))
-        .map(str::to_string);
+    let role = game_pack.map(str::to_string).or_else(|| {
+        role_input
+            .and_then(normalize_role_alias)
+            .or_else(|| type_input.and_then(normalize_role_alias))
+            .map(str::to_string)
+    });
 
     let allowed_tools = input
         .get("allowed_tools")
@@ -3771,7 +3912,15 @@ fn build_assignment_prompt(
 ) -> String {
     let role = assignment.role.as_deref().unwrap_or("default");
     format!(
-        "Assignment metadata:\n- objective: {}\n- role: {}\n- resolved_type: {}\n\nTask:\n{}",
+        "<deepseek:subagent_assignment>\n\
+         objective: {}\n\
+         role: {}\n\
+         resolved_type: {}\n\
+         final_report: use the mandatory Markdown H3 output contract from your system prompt\n\
+         </deepseek:subagent_assignment>\n\n\
+         <deepseek:task>\n\
+         {}\n\
+         </deepseek:task>",
         assignment.objective,
         role,
         agent_type.as_str(),
@@ -3973,11 +4122,165 @@ fn build_allowed_tools(
     Ok(None)
 }
 
+fn prepare_game_spawn_request(
+    spawn_request: &mut SpawnRequest,
+    input: &Value,
+    context: &ToolContext,
+) -> Result<(), ToolError> {
+    spawn_request.allowed_tools = Some(game_safe_subagent_tools());
+    let original_prompt = spawn_request.prompt.clone();
+    let Some(crate::game::GameSession::Loaded(session)) = context.game_session.as_ref() else {
+        spawn_request.prompt = game_scoped_prompt(None, &original_prompt);
+        return Ok(());
+    };
+
+    let packs = session.agent_packs().map_err(|err| {
+        ToolError::execution_failed(format!("Failed to build game agent packs: {err}"))
+    })?;
+    if packs.is_empty() {
+        spawn_request.prompt = game_scoped_prompt(None, &original_prompt);
+        return Ok(());
+    }
+
+    let requested = requested_game_pack(input, spawn_request.assignment.role.as_deref());
+    let Some(requested) = requested else {
+        return Err(ToolError::invalid_input(format!(
+            "game_agent_spawn requires pack/agent_pack/game_role/role when this game declares agent packs. Available packs: {}",
+            available_game_pack_roles(&packs)
+        )));
+    };
+    let Some(pack) = find_game_pack(&packs, requested) else {
+        return Err(ToolError::invalid_input(format!(
+            "Unknown game agent pack '{requested}'. Available packs: {}",
+            available_game_pack_roles(&packs)
+        )));
+    };
+
+    spawn_request.assignment.role = Some(pack.role.clone());
+    spawn_request.prompt = game_scoped_prompt(Some(pack), &original_prompt);
+    Ok(())
+}
+
+fn requested_game_pack<'a>(input: &'a Value, assignment_role: Option<&'a str>) -> Option<&'a str> {
+    optional_input_str(input, GAME_PACK_INPUT_KEYS).or_else(|| {
+        assignment_role.filter(|role| {
+            SubAgentType::from_str(role).is_none() && normalize_role_alias(role).is_none()
+        })
+    })
+}
+
+fn find_game_pack<'a>(
+    packs: &'a [deepseek_game::agents::AgentPack],
+    requested: &str,
+) -> Option<&'a deepseek_game::agents::AgentPack> {
+    let requested = requested.trim();
+    let requested_key = normalized_pack_key(requested);
+    packs.iter().find(|pack| {
+        (!requested_key.is_empty() && normalized_pack_key(&pack.role) == requested_key)
+            || pack.role.split_once('_').is_some_and(|(_, suffix)| {
+                !requested_key.is_empty() && normalized_pack_key(suffix) == requested_key
+            })
+            || pack
+                .relevant_save_slice
+                .pointer("/npc/id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| {
+                    id.eq_ignore_ascii_case(requested)
+                        || (!requested_key.is_empty() && normalized_pack_key(id) == requested_key)
+                })
+            || pack
+                .relevant_save_slice
+                .pointer("/npc/name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| {
+                    name.contains(requested)
+                        || (!requested_key.is_empty()
+                            && normalized_pack_key(name).contains(&requested_key))
+                })
+    })
+}
+
+fn available_game_pack_roles(packs: &[deepseek_game::agents::AgentPack]) -> String {
+    packs
+        .iter()
+        .map(|pack| pack.role.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn normalized_pack_key(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '_' || *ch == '-')
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn game_scoped_prompt(
+    pack: Option<&deepseek_game::agents::AgentPack>,
+    original_prompt: &str,
+) -> String {
+    let Some(pack) = pack else {
+        return format!(
+            "You are a game-scoped processor. Use only native game tools and return a proposal; do not call game_commit_turn or claim authoritative state.\n\nTask:\n{original_prompt}"
+        );
+    };
+
+    let allowed_files = format_path_lines(&pack.allowed_files);
+    let assigned_skills = format_path_lines(&pack.assigned_skills);
+    let driver_functions = if pack.callable_driver_functions.is_empty() {
+        "- none".to_string()
+    } else {
+        pack.callable_driver_functions
+            .iter()
+            .map(|function| format!("- {function}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let current_scene = format_json_block(&pack.current_scene);
+    let save_slice = format_json_block(&pack.relevant_save_slice);
+
+    format!(
+        "You are a game-scoped processor for agent pack `{}`. Use only native game tools and return a proposal; do not call game_commit_turn or claim authoritative state.\n\nOutput contract:\n{}\n\nAllowed context files:\n{}\n\nAssigned skills:\n{}\n\nCallable driver functions:\n{}\n\nCurrent scene:\n```json\n{}\n```\n\nRelevant save slice:\n```json\n{}\n```\n\nTask:\n{}",
+        pack.role,
+        pack.output_contract,
+        allowed_files,
+        assigned_skills,
+        driver_functions,
+        current_scene,
+        save_slice,
+        original_prompt
+    )
+}
+
+fn format_path_lines(paths: &[PathBuf]) -> String {
+    if paths.is_empty() {
+        return "- none".to_string();
+    }
+    paths
+        .iter()
+        .map(|path| format!("- {}", path.display()))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_json_block(value: &Value) -> String {
+    const MAX_CHARS: usize = 12_000;
+    let json = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
+    if json.chars().count() <= MAX_CHARS {
+        return json;
+    }
+    let truncated = json.chars().take(MAX_CHARS).collect::<String>();
+    format!("{truncated}\n... truncated ...")
+}
+
 fn game_safe_subagent_tools() -> Vec<String> {
     [
         "game_status",
         "game_render",
+        "game_playbook",
         "game_lookup",
+        "game_fact_check",
         "game_run_driver",
         "load_skill",
     ]
@@ -3988,13 +4291,27 @@ fn game_safe_subagent_tools() -> Vec<String> {
 
 fn summarize_subagent_result(result: &SubAgentResult) -> String {
     match (&result.status, result.result.as_ref()) {
-        (SubAgentStatus::Completed, Some(text)) => truncate_preview(text),
+        (SubAgentStatus::Completed, Some(text)) => {
+            truncate_preview(extract_subagent_summary(text).unwrap_or(text))
+        }
         (SubAgentStatus::Completed, None) => "Completed (no output)".to_string(),
         (SubAgentStatus::Interrupted(error), _) => format!("Interrupted: {error}"),
         (SubAgentStatus::Cancelled, _) => "Cancelled".to_string(),
         (SubAgentStatus::Failed(error), _) => format!("Failed: {error}"),
         (SubAgentStatus::Running, _) => "Running".to_string(),
     }
+}
+
+fn extract_subagent_summary(text: &str) -> Option<&str> {
+    let marker = "### SUMMARY";
+    let start = text.find(marker)? + marker.len();
+    let rest = text[start..].trim();
+    if rest.is_empty() {
+        return None;
+    }
+    let end = rest.find("\n### ").unwrap_or(rest.len());
+    let summary = rest[..end].trim();
+    (!summary.is_empty()).then_some(summary)
 }
 
 fn subagent_status_name(status: &SubAgentStatus) -> &'static str {

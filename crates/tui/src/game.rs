@@ -1,17 +1,49 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use deepseek_game::agents::{AgentPack, build_agent_packs};
 use deepseek_game::driver::{DriverResolver, LoadedDriver};
-use deepseek_game::interaction::{build_playbook, format_playbook};
+use deepseek_game::interaction::{ActionSkill, build_playbook, format_playbook};
 use deepseek_game::manifest::LoadedGame;
-use deepseek_game::render::{RenderPanel, render_panels};
+use deepseek_game::render::{GameViewSnapshot, RenderPanel, render_panels, render_view_snapshot};
 use deepseek_game::save::{LoadedSave, driver_lock, load_save};
+use serde::Serialize;
+use serde_json::Value;
 
 #[derive(Debug, Clone)]
 pub struct GameLaunchOptions {
     pub game_or_path: Option<PathBuf>,
     pub save: Option<String>,
     pub developer_mode: bool,
+    pub language: GameLanguage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GameLanguage {
+    #[default]
+    English,
+    Chinese,
+}
+
+impl GameLanguage {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "en" | "eng" | "english" => Some(Self::English),
+            "zh" | "cn" | "chinese" | "中文" | "汉语" | "漢語" => Some(Self::Chinese),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::English => "English",
+            Self::Chinese => "Chinese",
+        }
+    }
+
+    pub fn is_chinese(self) -> bool {
+        matches!(self, Self::Chinese)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -34,9 +66,12 @@ pub struct LoadedGameSession {
     pub driver_requirement: String,
     pub locked_driver_version: Option<String>,
     pub panels: Vec<RenderPanel>,
+    pub view: GameViewSnapshot,
+    pub action_skills: Vec<ActionSkill>,
     pub skills: Vec<GameSkillCatalogEntry>,
     pub warnings: Vec<String>,
     pub developer_mode: bool,
+    pub language: GameLanguage,
 }
 
 #[derive(Debug, Clone)]
@@ -47,10 +82,28 @@ pub struct GameSkillCatalogEntry {
     pub source: String,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct GameAgentPackSummary {
+    pub role: String,
+    pub output_contract: String,
+    pub allowed_files: Vec<String>,
+    pub assigned_skills: Vec<String>,
+    pub callable_driver_functions: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GameActionSkillShortcut {
+    pub trigger: String,
+    pub skill_name: String,
+    pub label: String,
+    pub description: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct GameSessionNotice {
     pub message: String,
     pub developer_mode: bool,
+    pub language: GameLanguage,
 }
 
 impl GameSession {
@@ -65,6 +118,13 @@ impl GameSession {
         match self {
             Self::Loaded(session) => session.developer_mode = enabled,
             Self::Notice(notice) => notice.developer_mode = enabled,
+        }
+    }
+
+    pub fn language(&self) -> GameLanguage {
+        match self {
+            Self::Loaded(session) => session.language,
+            Self::Notice(notice) => notice.language,
         }
     }
 
@@ -85,6 +145,7 @@ impl GameSession {
                     "Game Console".to_string(),
                     String::new(),
                     notice.message.clone(),
+                    format!("Selected language: {}", notice.language.label()),
                 ];
                 if notice.developer_mode {
                     lines.push("Developer mode: on".to_string());
@@ -107,6 +168,7 @@ impl GameSession {
                     "Developer mode: {}",
                     if notice.developer_mode { "on" } else { "off" }
                 ));
+                lines.push(format!("Selected language: {}", notice.language.label()));
                 lines.join("\n")
             }
         }
@@ -138,15 +200,55 @@ impl GameSession {
             Self::Notice(_) => Vec::new(),
         }
     }
+
+    pub fn action_skill_shortcuts(&self) -> Vec<GameActionSkillShortcut> {
+        match self {
+            Self::Loaded(session) => session.action_skill_shortcuts(),
+            Self::Notice(_) => Vec::new(),
+        }
+    }
+
+    pub fn resolve_action_skill_name(&self, name: &str) -> Option<String> {
+        match self {
+            Self::Loaded(session) => session.resolve_action_skill_name(name),
+            Self::Notice(_) => None,
+        }
+    }
+
+    pub fn refresh_from_game_tool_value(&mut self, value: &Value) -> bool {
+        match self {
+            Self::Loaded(session) => session.refresh_from_game_tool_value(value),
+            Self::Notice(_) => false,
+        }
+    }
 }
 
 impl LoadedGameSession {
+    pub(crate) fn agent_packs(&self) -> Result<Vec<AgentPack>> {
+        let driver_root = self
+            .driver_root
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("active game driver is not resolved"))?;
+        let driver = deepseek_game::driver::load_driver(driver_root)?;
+        let save = load_save(&self.saves_root, &self.save_id)?;
+        Ok(build_agent_packs(&driver.manifest, &save.state))
+    }
+
+    pub(crate) fn agent_pack_summaries(&self) -> Result<Vec<GameAgentPackSummary>> {
+        Ok(self
+            .agent_packs()?
+            .iter()
+            .map(GameAgentPackSummary::from_agent_pack)
+            .collect())
+    }
+
     fn status_report(&self) -> String {
         let mut lines = vec![
             "Game Console status".to_string(),
             String::new(),
             format!("Game: {} ({})", self.title, self.game_id),
             format!("Save: {} @ revision {}", self.save_id, self.revision),
+            format!("Selected language: {}", self.language.label()),
             format!(
                 "Driver: {} {}",
                 self.driver_id,
@@ -167,6 +269,7 @@ impl LoadedGameSession {
                 lines.push(format!("Driver root: {}", driver_root.display()));
             }
         }
+        self.append_agent_pack_guidance(&mut lines);
         if !self.warnings.is_empty() {
             lines.push(String::new());
             lines.push("Warnings:".to_string());
@@ -185,6 +288,7 @@ impl LoadedGameSession {
             String::new(),
             format!("{} ({})", self.title, self.game_id),
             format!("Save: {} @ revision {}", self.save_id, self.revision),
+            format!("Selected language: {}", self.language.label()),
             format!(
                 "Driver: {} {}",
                 self.driver_id,
@@ -193,7 +297,7 @@ impl LoadedGameSession {
                     .unwrap_or(&self.driver_requirement)
             ),
         ];
-        append_player_rules(&mut lines);
+        append_player_rules(&mut lines, self.language);
 
         if self.developer_mode {
             lines.push(format!("Game root: {}", self.game_root.display()));
@@ -228,6 +332,7 @@ impl LoadedGameSession {
             }
             lines.push("Use load_skill when a turn needs that rule pack.".to_string());
         }
+        self.append_agent_pack_guidance(&mut lines);
         if !self.panels.is_empty() {
             lines.push(String::new());
             lines.push("Panels:".to_string());
@@ -239,6 +344,30 @@ impl LoadedGameSession {
             }
         }
         lines.join("\n")
+    }
+
+    fn append_agent_pack_guidance(&self, lines: &mut Vec<String>) {
+        match self.agent_pack_summaries() {
+            Ok(packs) if !packs.is_empty() => {
+                lines.push(String::new());
+                lines.push("Scoped game sub-agents:".to_string());
+                for pack in packs {
+                    lines.push(format!("- {}: {}", pack.role, pack.output_contract));
+                    if !pack.assigned_skills.is_empty() {
+                        lines.push(format!("  skills: {}", pack.assigned_skills.join(", ")));
+                    }
+                    if !pack.allowed_files.is_empty() {
+                        lines.push(format!("  files: {}", pack.allowed_files.join(", ")));
+                    }
+                }
+                lines.push("Use game_agent_list to reuse live processors. For active NPC dialogue, reactions, memories, or stateful character behavior, call game_agent_spawn with pack/role set to the matching scoped pack, wait with game_agent_wait or game_agent_result, and treat the result as a proposal only. Final narration and save writes stay in the main session through game_commit_turn.".to_string());
+            }
+            Err(err) if self.developer_mode => {
+                lines.push(String::new());
+                lines.push(format!("Scoped game sub-agents: unavailable ({err})"));
+            }
+            _ => {}
+        }
     }
 
     fn choices_report(&self) -> Result<String> {
@@ -254,8 +383,9 @@ impl LoadedGameSession {
             String::new(),
             format!("{} ({})", self.title, self.game_id),
             format!("Save: {} @ revision {}", self.save_id, self.revision),
+            format!("Selected language: {}", self.language.label()),
         ];
-        append_player_rules(&mut lines);
+        append_player_rules(&mut lines, self.language);
         lines.push(String::new());
         lines.push("Current playbook".to_string());
         lines.push(format_playbook(&playbook));
@@ -272,19 +402,123 @@ impl LoadedGameSession {
         }
         dirs.into_iter().filter(|dir| dir.is_dir()).collect()
     }
+
+    fn action_skill_shortcuts(&self) -> Vec<GameActionSkillShortcut> {
+        let mut shortcuts = Vec::new();
+        for action in &self.action_skills {
+            let primary = action.id.trim();
+            if primary.is_empty() || action.skill.trim().is_empty() {
+                continue;
+            }
+            let label = action.label.trim();
+            let label = if label.is_empty() { primary } else { label };
+            if shortcuts
+                .iter()
+                .any(|shortcut: &GameActionSkillShortcut| shortcut.trigger == primary)
+            {
+                continue;
+            }
+            shortcuts.push(GameActionSkillShortcut {
+                trigger: primary.to_string(),
+                skill_name: action.skill.trim().to_string(),
+                label: label.to_string(),
+                description: action.description.trim().to_string(),
+            });
+        }
+        shortcuts
+    }
+
+    fn resolve_action_skill_name(&self, name: &str) -> Option<String> {
+        let requested = normalized_action_skill_name(name);
+        if requested.is_empty() {
+            return None;
+        }
+        self.action_skills
+            .iter()
+            .find(|action| {
+                normalized_action_skill_name(&action.skill) == requested
+                    || normalized_action_skill_name(&action.id) == requested
+                    || normalized_action_skill_name(&action.label) == requested
+                    || action
+                        .aliases
+                        .iter()
+                        .any(|alias| normalized_action_skill_name(alias) == requested)
+            })
+            .map(|action| action.skill.clone())
+    }
+
+    fn refresh_from_game_tool_value(&mut self, value: &Value) -> bool {
+        let mut refreshed = false;
+
+        if let Some(state) = value.get("state") {
+            self.revision = state
+                .get("revision")
+                .and_then(Value::as_u64)
+                .unwrap_or(self.revision);
+            self.panels = render_panels(state);
+            self.view = render_view_snapshot(state);
+            self.action_skills = build_playbook(state).action_skills;
+            return true;
+        }
+
+        if let Some(revision) = value.get("revision").and_then(Value::as_u64) {
+            self.revision = revision;
+            refreshed = true;
+        }
+
+        if let Some(panels) = value.get("panels")
+            && let Ok(panels) = serde_json::from_value::<Vec<RenderPanel>>(panels.clone())
+        {
+            self.panels = panels;
+            refreshed = true;
+        }
+
+        if let Some(view) = value.get("view")
+            && let Ok(view) = serde_json::from_value::<GameViewSnapshot>(view.clone())
+        {
+            self.view = view;
+            refreshed = true;
+        }
+
+        refreshed
+    }
 }
 
-fn append_player_rules(lines: &mut Vec<String>) {
+impl GameAgentPackSummary {
+    fn from_agent_pack(pack: &AgentPack) -> Self {
+        Self {
+            role: pack.role.clone(),
+            output_contract: pack.output_contract.clone(),
+            allowed_files: path_list(&pack.allowed_files),
+            assigned_skills: path_list(&pack.assigned_skills),
+            callable_driver_functions: pack.callable_driver_functions.clone(),
+        }
+    }
+}
+
+fn path_list(paths: &[PathBuf]) -> Vec<String> {
+    paths
+        .iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect()
+}
+
+fn normalized_action_skill_name(name: &str) -> String {
+    name.trim().to_ascii_lowercase()
+}
+
+fn append_player_rules(lines: &mut Vec<String>, language: GameLanguage) {
     lines.push(String::new());
-    lines.push("Language preference".to_string());
-    lines.push(
-        "Before the first turn, tell me what language you want to play in: English, Chinese, bilingual, or another preference. You can change it anytime by saying so."
-            .to_string(),
-    );
+    lines.push("Language".to_string());
+    lines.push(format!(
+        "The selected play language is {}. Do not ask the player to choose a language inside the session; keep all player-facing scene, dialogue, choices, and panel text in that language. Only English and Chinese are supported.",
+        language.label()
+    ));
     lines.push(String::new());
     lines.push("How to play".to_string());
-    lines.push("- Type a natural action, a line of dialogue, a numbered choice, or a bracket command such as [ASK], [INSPECT], [VOTE], or [APOLOGIZE].".to_string());
-    lines.push("- Freedom is allowed inside the framework: custom actions are playable, while the cartridge keeps scene facts, state, branch gates, and consequences coherent.".to_string());
+    lines.push("- Type a natural action, a line of dialogue, a numbered choice, or a bracket command shown by the current cartridge.".to_string());
+    lines.push("- When the playbook lists action skills, every action must fit exactly one listed skill. Free wording is allowed inside that skill; actions outside the skill set are not valid.".to_string());
+    lines.push("- The opening must always restate the background story in the selected language before the first live dialogue beat. After that, keep Dialogue focused on chat and immediate narration; status, tasks, items, choices, and story details belong in their own panels.".to_string());
     lines.push(
         "- Use /game choices for current options, /game render for the scene, /game status for save status, and /skill rule-repeat to see this guide again."
             .to_string(),
@@ -296,6 +530,7 @@ pub fn load_game_session(workspace: &Path, launch: GameLaunchOptions) -> Result<
         return Ok(GameSession::Notice(GameSessionNotice {
             message: "no game package selected".to_string(),
             developer_mode: launch.developer_mode,
+            language: launch.language,
         }));
     };
 
@@ -305,6 +540,7 @@ pub fn load_game_session(workspace: &Path, launch: GameLaunchOptions) -> Result<
             return Ok(GameSession::Notice(GameSessionNotice {
                 message: format!("failed to load {}: {err}", game_root.display()),
                 developer_mode: launch.developer_mode,
+                language: launch.language,
             }));
         }
     };
@@ -318,15 +554,22 @@ pub fn load_game_session(workspace: &Path, launch: GameLaunchOptions) -> Result<
             return Ok(GameSession::Notice(GameSessionNotice {
                 message: format!("failed to load save {save_id}: {err}"),
                 developer_mode: launch.developer_mode,
+                language: launch.language,
             }));
         }
     };
 
-    match build_loaded_session(loaded_game, loaded_save, launch.developer_mode) {
+    match build_loaded_session(
+        loaded_game,
+        loaded_save,
+        launch.developer_mode,
+        launch.language,
+    ) {
         Ok(session) => Ok(GameSession::Loaded(session)),
         Err(err) => Ok(GameSession::Notice(GameSessionNotice {
             message: format!("failed to load game session: {err}"),
             developer_mode: launch.developer_mode,
+            language: launch.language,
         })),
     }
 }
@@ -344,6 +587,7 @@ fn build_loaded_session(
     loaded_game: LoadedGame,
     loaded_save: LoadedSave,
     developer_mode: bool,
+    language: GameLanguage,
 ) -> Result<LoadedGameSession> {
     let revision = loaded_save
         .state
@@ -365,8 +609,11 @@ fn build_loaded_session(
         &loaded_save.root,
         Some(&resolved_driver.root),
     );
+    let action_skills = build_playbook(&loaded_save.state).action_skills;
     let mut warnings = loaded_game.warnings;
     warnings.extend(resolved_driver.warnings);
+    let panels = render_panels(&loaded_save.state);
+    let view = render_view_snapshot(&loaded_save.state);
     Ok(LoadedGameSession {
         game_root: loaded_game.root,
         saves_root: loaded_game.saves_root,
@@ -378,10 +625,13 @@ fn build_loaded_session(
         driver_id: loaded_game.manifest.driver.id,
         driver_requirement: loaded_game.manifest.driver.version,
         locked_driver_version: Some(locked_driver_version),
-        panels: render_panels(&loaded_save.state),
+        panels,
+        view,
+        action_skills,
         skills,
         warnings,
         developer_mode,
+        language,
     })
 }
 
@@ -464,6 +714,7 @@ mod tests {
                 game_or_path: Some(root),
                 save: Some("default".to_string()),
                 developer_mode: false,
+                language: GameLanguage::English,
             },
         )
         .expect("demo load should not error");
@@ -478,12 +729,30 @@ mod tests {
         assert!(!session.panels.is_empty());
         assert!(session.warnings.is_empty(), "{:?}", session.warnings);
         let intro = session.transcript_intro();
-        assert!(intro.contains("Language preference"), "{intro}");
+        assert!(intro.contains("Selected language: English"), "{intro}");
         assert!(intro.contains("/skill rule-repeat"), "{intro}");
         assert!(
-            intro.contains("Freedom is allowed inside the framework"),
+            intro.contains("every action must fit exactly one listed skill"),
             "{intro}"
         );
+        assert!(
+            intro.contains("The opening must always restate the background story"),
+            "{intro}"
+        );
+        assert!(intro.contains("Scoped game sub-agents"), "{intro}");
+        assert!(intro.contains("dialogue_girlfriend"), "{intro}");
+        assert!(intro.contains("game_agent_spawn"), "{intro}");
+        assert!(intro.contains("skills/npc/girlfriend/SKILL.md"), "{intro}");
+
+        let agent_packs = session.agent_pack_summaries().expect("agent packs");
+        assert!(
+            agent_packs
+                .iter()
+                .any(|pack| pack.role == "dialogue_girlfriend"),
+            "{agent_packs:?}"
+        );
+        let status = session.status_report();
+        assert!(status.contains("game_agent_result"), "{status}");
 
         let rules = session.rules_report().expect("rules report");
         assert!(rules.contains("Rule Repeat"), "{rules}");
@@ -501,6 +770,7 @@ mod tests {
                 game_or_path: Some(root),
                 save: Some("default".to_string()),
                 developer_mode: false,
+                language: GameLanguage::English,
             },
         )
         .expect("demo load should not error");
@@ -512,6 +782,15 @@ mod tests {
         assert_eq!(session.driver_id, "deliberation-drama");
         assert_eq!(session.locked_driver_version.as_deref(), Some("0.1.0"));
         assert!(session.driver_root.is_some());
+        assert_eq!(session.view.scene_title, "jury room");
+        assert!(
+            session
+                .view
+                .status
+                .iter()
+                .any(|line| line.contains("Votes"))
+        );
+        assert!(!session.view.tasks.is_empty());
         assert!(
             session.panels.len() >= 6,
             "expected base panels plus action/story panels"
@@ -543,6 +822,59 @@ mod tests {
         .expect("declared driver function should run");
         assert_eq!(result.result["clock_minutes"], 22);
         assert_eq!(result.result["time_delta"], 10);
+    }
+
+    #[test]
+    fn loaded_game_session_refreshes_from_game_tool_json() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("examples/games/reconciliation-demo");
+        let mut session = load_game_session(
+            Path::new("."),
+            GameLaunchOptions {
+                game_or_path: Some(root),
+                save: Some("default".to_string()),
+                developer_mode: false,
+                language: GameLanguage::English,
+            },
+        )
+        .expect("demo load should not error");
+
+        let changed = session.refresh_from_game_tool_value(&json!({
+            "revision": 3,
+            "panels": [
+                {
+                    "id": "scene",
+                    "title": "Changed",
+                    "body": "Changed body",
+                    "kind": "scene"
+                }
+            ],
+            "view": {
+                "revision": 3,
+                "scene_title": "Changed",
+                "scene": "Changed body",
+                "figure_title": "Speaker",
+                "figure": "Speaker body",
+                "status": ["valid"],
+                "items": [],
+                "tasks": ["new task"],
+                "dialogue": [],
+                "choices": [],
+                "validation": "valid",
+                "scene_art": null,
+                "figure_art": null,
+                "music": null
+            }
+        }));
+
+        assert!(changed);
+        let GameSession::Loaded(session) = session else {
+            panic!("expected loaded game");
+        };
+        assert_eq!(session.revision, 3);
+        assert_eq!(session.panels[0].title, "Changed");
+        assert_eq!(session.view.tasks, vec!["new task".to_string()]);
     }
 
     #[test]
@@ -593,6 +925,7 @@ root = "saves"
                 game_or_path: Some(game),
                 save: Some("default".to_string()),
                 developer_mode: false,
+                language: GameLanguage::English,
             },
         )
         .expect("loading failures are represented as notices");

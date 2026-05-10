@@ -3,7 +3,7 @@
 use std::fmt::Write;
 use std::path::PathBuf;
 
-use crate::game::{GameLaunchOptions, GameSession};
+use crate::game::{GameLanguage, GameLaunchOptions, GameSession};
 use crate::tui::app::App;
 
 use super::CommandResult;
@@ -54,6 +54,11 @@ fn parse_play_args(app: &App, arg: Option<&str>) -> Result<GameLaunchOptions, St
         .game_session
         .as_ref()
         .is_some_and(GameSession::developer_mode);
+    let mut language = app
+        .game_session
+        .as_ref()
+        .map(GameSession::language)
+        .unwrap_or_default();
 
     let tokens: Vec<&str> = arg
         .unwrap_or("")
@@ -67,9 +72,27 @@ fn parse_play_args(app: &App, arg: Option<&str>) -> Result<GameLaunchOptions, St
                 developer_mode = true;
                 index += 1;
             }
+            "--lang" | "--language" => {
+                let Some(value) = tokens.get(index + 1) else {
+                    return Err(
+                        "Usage: /play [game-or-path] [--save <id>] [--lang en|zh] [--dev]"
+                            .to_string(),
+                    );
+                };
+                let Some(parsed) = GameLanguage::parse(value) else {
+                    return Err(format!(
+                        "unsupported /play language: {value}. Use en or zh."
+                    ));
+                };
+                language = parsed;
+                index += 2;
+            }
             "--save" | "-s" => {
                 let Some(value) = tokens.get(index + 1) else {
-                    return Err("Usage: /play [game-or-path] [--save <id>] [--dev]".to_string());
+                    return Err(
+                        "Usage: /play [game-or-path] [--save <id>] [--lang en|zh] [--dev]"
+                            .to_string(),
+                    );
                 };
                 save = Some((*value).to_string());
                 index += 2;
@@ -79,7 +102,10 @@ fn parse_play_args(app: &App, arg: Option<&str>) -> Result<GameLaunchOptions, St
             }
             token => {
                 if game_or_path.is_some() {
-                    return Err("Usage: /play [game-or-path] [--save <id>] [--dev]".to_string());
+                    return Err(
+                        "Usage: /play [game-or-path] [--save <id>] [--lang en|zh] [--dev]"
+                            .to_string(),
+                    );
                 }
                 game_or_path = Some(PathBuf::from(token));
                 index += 1;
@@ -91,6 +117,7 @@ fn parse_play_args(app: &App, arg: Option<&str>) -> Result<GameLaunchOptions, St
         game_or_path,
         save,
         developer_mode,
+        language,
     })
 }
 

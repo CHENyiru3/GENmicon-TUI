@@ -43,7 +43,7 @@ impl ToolSpec for LoadSkillTool {
 
     fn description(&self) -> &'static str {
         "Load a skill (SKILL.md body + companion file list) into the next turn's context. \
-         Use this when the user names a skill or the task clearly matches a skill listed in the system prompt's `## Skills` section. Faster than read_file + list_dir."
+         Use this when the user names a skill or the task clearly matches a skill listed in the system prompt's `## Skills` section. Accepts name, skill, skill_name, or id. Faster than read_file + list_dir."
     }
 
     fn input_schema(&self) -> Value {
@@ -53,9 +53,21 @@ impl ToolSpec for LoadSkillTool {
                 "name": {
                     "type": "string",
                     "description": "Skill id (the `name` field from the SKILL.md frontmatter, also shown in the `## Skills` listing)."
+                },
+                "skill": {
+                    "type": "string",
+                    "description": "Alias for name, accepted for model repair."
+                },
+                "skill_name": {
+                    "type": "string",
+                    "description": "Alias for name, accepted for model repair."
+                },
+                "id": {
+                    "type": "string",
+                    "description": "Alias for name, accepted for model repair."
                 }
             },
-            "required": ["name"],
+            "required": [],
             "additionalProperties": false
         })
     }
@@ -73,17 +85,6 @@ impl ToolSpec for LoadSkillTool {
     }
 
     async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
-        let name = input
-            .get("name")
-            .and_then(Value::as_str)
-            .ok_or_else(|| ToolError::missing_field("name"))?
-            .trim();
-        if name.is_empty() {
-            return Err(ToolError::invalid_input(
-                "`name` must be a non-empty string",
-            ));
-        }
-
         // #432: walk every candidate skill directory (workspace
         // .agents/skills, skills, .opencode/skills, .claude/skills,
         // .cursor/skills, ~/.agents/skills, global default), merging with
@@ -92,30 +93,15 @@ impl ToolSpec for LoadSkillTool {
         // already lists, so the model never asks for a name it
         // can't find.
         let registry = discover_in_workspace(&context.workspace);
+        let Some(name) = requested_skill_name(&input) else {
+            return skill_help_result(context, &registry, None);
+        };
         let skill = registry
-            .get(name)
+            .get(&name)
             .cloned()
-            .or_else(|| find_game_skill(context, name));
+            .or_else(|| find_game_skill(context, &name));
         let Some(skill) = skill else {
-            let available = available_skill_names(context, &registry);
-            let hint = if available.is_empty() {
-                let dirs: Vec<String> = skills_directories(&context.workspace)
-                    .iter()
-                    .map(|p| p.display().to_string())
-                    .collect();
-                if dirs.is_empty() {
-                    "no skills directories found; install skills under `<workspace>/.agents/skills/<name>/SKILL.md`, `~/.agents/skills/<name>/SKILL.md`, or `~/.deepseek/skills/<name>/SKILL.md`"
-                        .to_string()
-                } else {
-                    format!("no skills installed. Searched: {}", dirs.join(", "))
-                }
-            } else {
-                format!(
-                    "skill `{name}` not found. Available: {}",
-                    available.join(", ")
-                )
-            };
-            return Err(ToolError::execution_failed(hint));
+            return skill_help_result(context, &registry, Some(&name));
         };
 
         let body = format_skill_body(&skill);
@@ -128,6 +114,19 @@ impl ToolSpec for LoadSkillTool {
                 .collect::<Vec<String>>(),
         })))
     }
+}
+
+fn requested_skill_name(input: &Value) -> Option<String> {
+    ["name", "skill", "skill_name", "id"]
+        .into_iter()
+        .find_map(|key| {
+            input
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
 }
 
 fn find_game_skill(context: &ToolContext, name: &str) -> Option<Skill> {
@@ -151,6 +150,41 @@ fn available_skill_names(context: &ToolContext, registry: &SkillRegistry) -> Vec
         }
     }
     names.into_iter().collect()
+}
+
+fn skill_help_result(
+    context: &ToolContext,
+    registry: &SkillRegistry,
+    missing: Option<&str>,
+) -> Result<ToolResult, ToolError> {
+    let available = available_skill_names(context, registry);
+    let dirs: Vec<String> = skills_directories(&context.workspace)
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect();
+    let message = match missing {
+        Some(name) if available.is_empty() => {
+            format!("skill `{name}` not found; no skills are currently installed")
+        }
+        Some(name) => format!("skill `{name}` not found"),
+        None if available.is_empty() => {
+            "load_skill needs a skill name; no skills are currently installed".to_string()
+        }
+        None => "load_skill needs a skill name".to_string(),
+    };
+    ToolResult::json(&json!({
+        "kind": "skill_help",
+        "message": message,
+        "accepted_fields": ["name", "skill", "skill_name", "id"],
+        "examples": [
+            {"name": "game-action-router"},
+            {"skill": "reconciliation"},
+            {"skill_name": "game-storytelling-director"}
+        ],
+        "available_skills": available,
+        "searched_dirs": dirs,
+    }))
+    .map_err(|err| ToolError::execution_failed(err.to_string()))
 }
 
 /// Render the skill body the model will see. Includes the description
@@ -392,9 +426,15 @@ mod tests {
                 driver_requirement: "0.1.0".to_string(),
                 locked_driver_version: Some("0.1.0".to_string()),
                 panels: Vec::new(),
+                view: deepseek_game::render::render_view_snapshot(&json!({
+                    "revision": 0,
+                    "scene": {"location": "Test", "summary": "Test scene."}
+                })),
+                action_skills: Vec::new(),
                 skills: Vec::new(),
                 warnings: Vec::new(),
                 developer_mode: false,
+                language: crate::game::GameLanguage::English,
             },
         ));
 
@@ -408,7 +448,55 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn execute_returns_helpful_error_for_unknown_skill() {
+    async fn execute_accepts_skill_alias() {
+        let tmp = tempdir().unwrap();
+        let workspace = tmp.path().to_path_buf();
+        write_skill(
+            &workspace.join(".agents").join("skills"),
+            "alias-skill",
+            "x",
+            "Alias body marker.",
+        );
+
+        let context = ToolContext::new(workspace);
+        let tool = LoadSkillTool;
+        let result = tool
+            .execute(json!({"skill": "alias-skill"}), &context)
+            .await
+            .expect("load_skill should accept skill alias");
+        assert!(result.success);
+        assert!(result.content.contains("Alias body marker."));
+    }
+
+    #[tokio::test]
+    async fn execute_returns_guidance_for_missing_name() {
+        let tmp = tempdir().unwrap();
+        let workspace = tmp.path().to_path_buf();
+        write_skill(
+            &workspace.join(".agents").join("skills"),
+            "real-one",
+            "x",
+            "body",
+        );
+
+        let context = ToolContext::new(workspace);
+        let tool = LoadSkillTool;
+        let result = tool
+            .execute(json!({}), &context)
+            .await
+            .expect("empty load_skill should return guidance");
+        let content: Value = serde_json::from_str(&result.content).expect("json result");
+        assert_eq!(content["kind"], "skill_help");
+        assert!(
+            content["available_skills"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("real-one"))
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_returns_helpful_guidance_for_unknown_skill() {
         let tmp = tempdir().unwrap();
         let workspace = tmp.path().to_path_buf();
         // One real skill so the available list is non-empty.
@@ -421,11 +509,11 @@ mod tests {
 
         let context = ToolContext::new(workspace);
         let tool = LoadSkillTool;
-        let err = tool
+        let result = tool
             .execute(json!({"name": "imaginary"}), &context)
             .await
-            .expect_err("unknown skill should error");
-        let msg = err.to_string();
+            .expect("unknown skill should return guidance");
+        let msg = result.content;
         assert!(
             msg.contains("imaginary") && msg.contains("real-one"),
             "error must name the missing skill and list available ones: {msg}"

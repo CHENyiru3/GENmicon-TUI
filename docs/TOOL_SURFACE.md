@@ -18,7 +18,7 @@ chosen over the available shell equivalent. Companion to `crates/tui/src/prompts
 ## Game TUI Tool Profile
 
 Game TUI tools are specified in
-[`GAME_TUI_FRAMEWORK_SPEC.md`](GAME_TUI_FRAMEWORK_SPEC.md). The initial
+[`GAME_TUI_FRAMEWORK_SPEC.md`](GAME_TUI_FRAMEWORK_SPEC.md). The current
 implementation registers the native `game_*` tools when an active
 `GameSession` exists. Player mode uses a whitelist:
 
@@ -28,14 +28,16 @@ implementation registers the native `game_*` tools when an active
 | `game_render` | Return structured panel data from the current save. | No |
 | `game_playbook` | Return current commands, suggested choices, and visible story nodes. | No |
 | `game_lookup` | Retrieve bounded content under the game package root. | No |
+| `game_fact_check` | Check actions and proposed narration against continuity facts. | No |
 | `game_run_driver` | Run a declared deterministic driver function. | No |
-| `game_commit_turn` | Append one turn and update save state atomically. | Yes |
+| `game_commit_turn` | Append one turn and update save state atomically. | Auto in player mode |
 
 Player mode may also expose skill-loading support and game-scoped sub-agent
-helpers named `game_agent_spawn`, `game_agent_send`, `game_agent_wait`,
-`game_agent_resume`, and `game_agent_list`. Those helpers must remain
-game-scoped and should converge on declared driver roles and generated agent
-packs. V1 should not add a model-visible `game_parallel` wrapper; safe
+helpers named `game_agent_spawn`, `game_agent_wait`, `game_agent_result`,
+`game_agent_send`, `game_agent_resume`, `game_agent_assign`,
+`game_agent_cancel`, and `game_agent_list`. Those helpers must remain
+game-scoped and use declared driver roles and generated agent packs when the
+active game declares them. V1 should not add a model-visible `game_parallel` wrapper; safe
 parallelism is an engine behavior, not an advertised meta-tool.
 
 Shell, generic file write/edit tools, repository git tools, broad workspace inspection,
@@ -48,7 +50,7 @@ Game progress may use git-like concepts inside save state, such as branch heads
 and immutable turn records, but normal player mode must not commit to or branch
 the user's repository.
 
-## Current surface (v0.7.5)
+## Current Surface
 
 ### File operations
 
@@ -209,11 +211,13 @@ no longer pollute the model's tool list):
 - `close_agent` → use `agent_cancel`.
 - `assign_agent` → use `agent_assign`.
 
-## Deprecation schedule (v0.6.2 → v0.8.0)
+## Legacy Alias Compatibility
 
 The alias tools below still execute successfully but now attach a
-`_deprecation` block to every result they return. Models should migrate to
-the canonical name before v0.8.0, when the aliases will be removed.
+`_deprecation` block to every result they return. Models should use the
+canonical names in new sessions. The runtime still reports the original
+`removed_in = "0.8.0"` metadata value for compatibility with older saved
+sessions, even though the aliases remain registered today.
 
 | Deprecated alias | Canonical name | Warning since | Removal |
 |---|---|---|---|

@@ -602,6 +602,62 @@ impl Default for ViewportState {
     }
 }
 
+/// Which scrollable Game Console panel receives keyboard scroll input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GameConsoleFocus {
+    #[default]
+    Dialogue,
+    Progress,
+}
+
+/// Player-mode Game Console presentation state.
+#[derive(Debug, Clone, Default)]
+pub struct GameConsoleState {
+    pub focus: GameConsoleFocus,
+    pub progress_scroll: usize,
+    pub dialogue_scroll: usize,
+}
+
+impl GameConsoleState {
+    pub fn reset_view(&mut self) {
+        self.focus = GameConsoleFocus::Dialogue;
+        self.progress_scroll = 0;
+        self.dialogue_scroll = 0;
+    }
+
+    pub fn toggle_focus(&mut self) {
+        self.focus = match self.focus {
+            GameConsoleFocus::Dialogue => GameConsoleFocus::Progress,
+            GameConsoleFocus::Progress => GameConsoleFocus::Dialogue,
+        };
+    }
+
+    pub fn scroll_up(&mut self, amount: usize) {
+        let scroll = self.focused_scroll_mut();
+        *scroll = scroll.saturating_sub(amount);
+    }
+
+    pub fn scroll_down(&mut self, amount: usize) {
+        let scroll = self.focused_scroll_mut();
+        *scroll = scroll.saturating_add(amount);
+    }
+
+    pub fn scroll_to_top(&mut self) {
+        *self.focused_scroll_mut() = 0;
+    }
+
+    pub fn scroll_to_bottom(&mut self) {
+        *self.focused_scroll_mut() = usize::MAX;
+    }
+
+    fn focused_scroll_mut(&mut self) -> &mut usize {
+        match self.focus {
+            GameConsoleFocus::Dialogue => &mut self.dialogue_scroll,
+            GameConsoleFocus::Progress => &mut self.progress_scroll,
+        }
+    }
+}
+
 /// Goal mode state (#397).
 #[derive(Debug, Clone, Default)]
 pub struct GoalState {
@@ -742,6 +798,8 @@ pub struct App {
     /// Active Game Console state. This is presentation/tool-profile state, not
     /// a fourth `AppMode`.
     pub game_session: Option<crate::game::GameSession>,
+    /// Player-mode panel focus, scroll offsets, and progress page.
+    pub game_console: GameConsoleState,
     #[allow(dead_code)]
     pub compact_threshold: usize,
     pub max_input_history: usize,
@@ -831,6 +889,8 @@ pub struct App {
     pub tool_log: Vec<String>,
     /// Active skill to apply to next user message
     pub active_skill: Option<String>,
+    /// Human-readable active skill label shown in composer/status surfaces.
+    pub active_skill_name: Option<String>,
     /// Cached (name, description) pairs from the skill registry.
     /// Populated once at startup and refreshed on install/uninstall so
     /// the slash menu can show skills without filesystem I/O on every keystroke.
@@ -1040,6 +1100,58 @@ impl QueuedMessage {
             )
         } else {
             self.display.clone()
+        }
+    }
+}
+
+const GAME_ACTION_SKILL_DESCRIPTION_PREFIX: &str = "Game action:";
+const GAME_SKILL_DESCRIPTION_PREFIX: &str = "Game skill:";
+
+fn add_unique_cached_skill(
+    cached_skills: &mut Vec<(String, String)>,
+    name: String,
+    description: String,
+) {
+    if cached_skills
+        .iter()
+        .any(|(existing_name, _)| existing_name == &name)
+    {
+        return;
+    }
+    cached_skills.push((name, description));
+}
+
+fn add_game_skill_cache_entries(
+    cached_skills: &mut Vec<(String, String)>,
+    game_session: &crate::game::GameSession,
+) {
+    for shortcut in game_session.action_skill_shortcuts() {
+        let description = if shortcut.description.is_empty() {
+            format!(
+                "{GAME_ACTION_SKILL_DESCRIPTION_PREFIX} {} uses {}",
+                shortcut.label, shortcut.skill_name
+            )
+        } else {
+            format!(
+                "{GAME_ACTION_SKILL_DESCRIPTION_PREFIX} {} - {}",
+                shortcut.label, shortcut.description
+            )
+        };
+        add_unique_cached_skill(cached_skills, shortcut.trigger, description);
+    }
+
+    if let crate::game::GameSession::Loaded(session) = game_session {
+        for skill in &session.skills {
+            let description = if skill.description.trim().is_empty() {
+                format!("{GAME_SKILL_DESCRIPTION_PREFIX} {}", skill.source)
+            } else {
+                format!(
+                    "{GAME_SKILL_DESCRIPTION_PREFIX} {} - {}",
+                    skill.source,
+                    skill.description.trim()
+                )
+            };
+            add_unique_cached_skill(cached_skills, skill.name.clone(), description);
         }
     }
 }
@@ -1327,6 +1439,7 @@ impl App {
             context_panel: settings.context_panel,
             file_tree: None,
             game_session: None,
+            game_console: GameConsoleState::default(),
             compact_threshold,
             max_input_history,
             allow_shell,
@@ -1389,6 +1502,7 @@ impl App {
             mcp_restart_required: false,
             tool_log: Vec::new(),
             active_skill: None,
+            active_skill_name: None,
             cached_skills,
             tool_cells: HashMap::new(),
             tool_details_by_cell: HashMap::new(),
@@ -1448,7 +1562,9 @@ impl App {
     pub(crate) fn install_game_session(&mut self, game_session: crate::game::GameSession) {
         let status = game_session.status_label();
         let intro = game_session.transcript_intro();
+        self.game_console.reset_view();
         self.game_session = Some(game_session);
+        self.refresh_skill_cache();
         self.add_message(HistoryCell::System { content: intro });
         self.push_status_toast(status, StatusToastLevel::Info, Some(8_000));
     }
@@ -1478,6 +1594,8 @@ impl App {
 
     pub(crate) fn clear_game_session(&mut self) {
         self.game_session = None;
+        self.game_console.reset_view();
+        self.refresh_skill_cache();
         self.push_status_toast("Game Console closed", StatusToastLevel::Info, Some(4_000));
     }
 
@@ -1490,7 +1608,11 @@ impl App {
     }
 
     pub fn refresh_skill_cache(&mut self) {
-        self.cached_skills = Self::discover_cached_skills(&self.workspace);
+        let mut cached_skills = Self::discover_cached_skills(&self.workspace);
+        if let Some(game_session) = self.game_session.as_ref() {
+            add_game_skill_cache_entries(&mut cached_skills, game_session);
+        }
+        self.cached_skills = cached_skills;
     }
 
     pub fn submit_api_key(&mut self) -> Result<SavedCredential, ApiKeyError> {

@@ -104,8 +104,8 @@ use super::views::{
 };
 use super::widgets::pending_input_preview::{ContextPreviewItem, PendingInputPreview};
 use super::widgets::{
-    ChatWidget, ComposerWidget, FooterProps, FooterToast, FooterWidget, HeaderData, HeaderWidget,
-    Renderable,
+    ChatWidget, ComposerWidget, FooterProps, FooterToast, FooterWidget, GameConsoleWidget,
+    HeaderData, HeaderWidget, Renderable,
 };
 
 // === Constants ===
@@ -747,6 +747,9 @@ async fn run_event_loop(
                         }
                     }
                     EngineEvent::ThinkingStarted { .. } => {
+                        if game_player_presentation(app) {
+                            continue;
+                        }
                         // P2.3: thinking lives in the active cell so it groups
                         // visually with the tool calls that follow until the
                         // next assistant prose chunk flushes the group.
@@ -763,6 +766,9 @@ async fn run_event_loop(
                         if app.reasoning_header.is_none() {
                             app.reasoning_header = extract_reasoning_header(&app.reasoning_buffer);
                         }
+                        if game_player_presentation(app) {
+                            continue;
+                        }
 
                         let entry_idx = ensure_streaming_thinking_active_entry(app);
                         app.streaming_state.push_content(0, &sanitized);
@@ -773,6 +779,10 @@ async fn run_event_loop(
                         }
                     }
                     EngineEvent::ThinkingComplete { .. } => {
+                        if game_player_presentation(app) {
+                            stash_reasoning_buffer_into_last_reasoning(app);
+                            continue;
+                        }
                         if finalize_current_streaming_thinking(app) {
                             transcript_batch_updated = true;
                         }
@@ -793,7 +803,9 @@ async fn run_event_loop(
                                 app.last_fanout_card_index = None;
                             }
                         }
-                        handle_tool_call_started(app, &id, &name, &input);
+                        if !game_player_presentation(app) {
+                            handle_tool_call_started(app, &id, &name, &input);
+                        }
                     }
                     EngineEvent::ToolCallComplete { id, name, result } => {
                         if name == "update_plan" {
@@ -816,7 +828,10 @@ async fn run_event_loop(
                                 content_blocks: None,
                             }],
                         });
-                        handle_tool_call_complete(app, &id, &name, &result);
+                        if !game_player_presentation(app) {
+                            handle_tool_call_complete(app, &id, &name, &result);
+                        }
+                        refresh_game_session_from_tool_result(app, &name, &result);
 
                         // Immediately refresh the task panel sidebar when a
                         // tool that changes task state completes, so the
@@ -2125,6 +2140,15 @@ async fn run_event_loop(
                 )
             {
                 app.backtrack.reset();
+            }
+
+            if game_player_presentation(app)
+                && app.input.is_empty()
+                && !mention_menu_open
+                && !slash_menu_open
+                && handle_game_console_key(app, key)
+            {
+                continue;
             }
 
             // Global keybindings
@@ -3474,6 +3498,82 @@ enum EscapeAction {
     Noop,
 }
 
+fn game_player_presentation(app: &App) -> bool {
+    app.game_session
+        .as_ref()
+        .is_some_and(|session| !session.developer_mode())
+}
+
+fn handle_game_console_key(app: &mut App, key: KeyEvent) -> bool {
+    match key.code {
+        KeyCode::Tab | KeyCode::BackTab => {
+            app.game_console.toggle_focus();
+            app.needs_redraw = true;
+            true
+        }
+        KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
+            app.game_console.scroll_up(1);
+            app.needs_redraw = true;
+            true
+        }
+        KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
+            app.game_console.scroll_down(1);
+            app.needs_redraw = true;
+            true
+        }
+        KeyCode::PageUp => {
+            let page = app.viewport.last_transcript_visible.max(8);
+            app.game_console.scroll_up(page);
+            app.needs_redraw = true;
+            true
+        }
+        KeyCode::PageDown => {
+            let page = app.viewport.last_transcript_visible.max(8);
+            app.game_console.scroll_down(page);
+            app.needs_redraw = true;
+            true
+        }
+        KeyCode::Char('g') if key.modifiers.is_empty() => {
+            app.game_console.scroll_to_top();
+            app.needs_redraw = true;
+            true
+        }
+        KeyCode::Char('G') if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            app.game_console.scroll_to_bottom();
+            app.needs_redraw = true;
+            true
+        }
+        _ => false,
+    }
+}
+
+fn refresh_game_session_from_tool_result(
+    app: &mut App,
+    tool_name: &str,
+    result: &std::result::Result<crate::tools::spec::ToolResult, crate::tools::spec::ToolError>,
+) {
+    if !matches!(tool_name, "game_render" | "game_commit_turn") {
+        return;
+    }
+    let Ok(output) = result else {
+        return;
+    };
+    if !output.success {
+        return;
+    }
+    let Some(game_session) = app.game_session.as_mut() else {
+        return;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&output.content) else {
+        return;
+    };
+    if game_session.refresh_from_game_tool_value(&value) {
+        app.refresh_skill_cache();
+        app.game_console.progress_scroll = 0;
+        app.game_console.dialogue_scroll = usize::MAX;
+    }
+}
+
 fn next_escape_action(app: &App, slash_menu_open: bool) -> EscapeAction {
     if slash_menu_open {
         EscapeAction::CloseSlashMenu
@@ -3655,6 +3755,7 @@ fn sync_api_key_validation_status(app: &mut App, show_empty_error: bool) {
 
 fn build_queued_message(app: &mut App, input: String) -> QueuedMessage {
     let skill_instruction = app.active_skill.take();
+    app.active_skill_name = None;
     QueuedMessage::new(input, skill_instruction)
 }
 
@@ -5291,6 +5392,11 @@ fn render(f: &mut Frame, app: &mut App) {
         return;
     }
 
+    if game_player_presentation(app) {
+        render_game_player_console(f, app, size);
+        return;
+    }
+
     let header_height = 1;
     let footer_height = 1;
     let body_height = size.height.saturating_sub(header_height + footer_height);
@@ -5469,16 +5575,79 @@ fn render(f: &mut Frame, app: &mut App) {
     // burst of events isn't collapsed to a single visible message.
     render_toast_stack_overlay(f, size, chunks[4], app);
 
-    if !app.view_stack.is_empty() {
-        // The live transcript overlay snapshots the app's history + active
-        // cell on each render so streaming mutations propagate. Other views
-        // are static and skip this refresh.
-        if app.view_stack.top_kind() == Some(ModalKind::LiveTranscript) {
-            refresh_live_transcript_overlay(app);
-        }
-        let buf = f.buffer_mut();
-        app.view_stack.render(size, buf);
+    render_view_stack(f, size, app);
+}
+
+fn render_game_player_console(f: &mut Frame, app: &mut App, size: Rect) {
+    let slash_menu_entries = visible_slash_menu_entries(app, SLASH_MENU_LIMIT);
+    let mention_menu_entries =
+        crate::tui::file_mention::visible_mention_menu_entries(app, MENTION_MENU_LIMIT);
+    if !mention_menu_entries.is_empty() && app.mention_menu_selected >= mention_menu_entries.len() {
+        app.mention_menu_selected = mention_menu_entries.len().saturating_sub(1);
     }
+
+    let composer_max_height = size.height.saturating_sub(8).clamp(MIN_COMPOSER_HEIGHT, 8);
+    let composer_height = {
+        let composer_widget = ComposerWidget::new(
+            app,
+            composer_max_height,
+            &slash_menu_entries,
+            &mention_menu_entries,
+        );
+        composer_widget.desired_height(size.width)
+    };
+    let pending_preview = build_pending_input_preview(app);
+    let preview_height = pending_preview.desired_height(size.width);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(preview_height),
+            Constraint::Length(composer_height),
+        ])
+        .split(size);
+
+    {
+        let widget = GameConsoleWidget::new(app);
+        let buf = f.buffer_mut();
+        widget.render(chunks[0], buf);
+    }
+
+    if preview_height > 0 {
+        let buf = f.buffer_mut();
+        pending_preview.render(chunks[1], buf);
+    }
+
+    let cursor_pos = {
+        let composer_widget = ComposerWidget::new(
+            app,
+            composer_max_height,
+            &slash_menu_entries,
+            &mention_menu_entries,
+        );
+        let buf = f.buffer_mut();
+        composer_widget.render(chunks[2], buf);
+        composer_widget.cursor_pos(chunks[2])
+    };
+    if let Some(cursor_pos) = cursor_pos {
+        f.set_cursor_position(cursor_pos);
+    }
+
+    render_view_stack(f, size, app);
+}
+
+fn render_view_stack(f: &mut Frame, size: Rect, app: &mut App) {
+    if app.view_stack.is_empty() {
+        return;
+    }
+    // The live transcript overlay snapshots the app's history + active
+    // cell on each render so streaming mutations propagate. Other views
+    // are static and skip this refresh.
+    if app.view_stack.top_kind() == Some(ModalKind::LiveTranscript) {
+        refresh_live_transcript_overlay(app);
+    }
+    let buf = f.buffer_mut();
+    app.view_stack.render(size, buf);
 }
 
 fn draw_app_frame(terminal: &mut AppTerminal, app: &mut App) -> Result<()> {
@@ -7475,6 +7644,22 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEvent> {
     if !app.view_stack.is_empty() {
         app.needs_redraw = true;
         return app.view_stack.handle_mouse(mouse);
+    }
+
+    if game_player_presentation(app) {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                app.game_console.scroll_up(3);
+                app.needs_redraw = true;
+                return Vec::new();
+            }
+            MouseEventKind::ScrollDown => {
+                app.game_console.scroll_down(3);
+                app.needs_redraw = true;
+                return Vec::new();
+            }
+            _ => {}
+        }
     }
 
     match mouse.kind {

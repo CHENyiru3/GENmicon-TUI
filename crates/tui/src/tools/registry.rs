@@ -510,13 +510,14 @@ impl ToolRegistryBuilder {
     #[must_use]
     pub fn with_game_tools(self) -> Self {
         use super::game::{
-            GameCommitTurnTool, GameLookupTool, GamePlaybookTool, GameRenderTool,
-            GameRunDriverTool, GameStatusTool,
+            GameCommitTurnTool, GameFactCheckTool, GameLookupTool, GamePlaybookTool,
+            GameRenderTool, GameRunDriverTool, GameStatusTool,
         };
         self.with_tool(Arc::new(GameStatusTool))
             .with_tool(Arc::new(GameRenderTool))
             .with_tool(Arc::new(GamePlaybookTool))
             .with_tool(Arc::new(GameLookupTool))
+            .with_tool(Arc::new(GameFactCheckTool))
             .with_tool(Arc::new(GameRunDriverTool))
             .with_tool(Arc::new(GameCommitTurnTool))
     }
@@ -860,7 +861,8 @@ impl ToolRegistryBuilder {
         runtime: super::subagent::SubAgentRuntime,
     ) -> Self {
         use super::subagent::{
-            AgentListTool, AgentResumeTool, AgentSendInputTool, AgentSpawnTool, AgentWaitTool,
+            AgentAssignTool, AgentCancelTool, AgentListTool, AgentResultTool, AgentResumeTool,
+            AgentSendInputTool, AgentSpawnTool, AgentWaitTool,
         };
 
         self.with_tool(Arc::new(AgentSpawnTool::with_name(
@@ -868,9 +870,17 @@ impl ToolRegistryBuilder {
             runtime.clone(),
             "game_agent_spawn",
         )))
+        .with_tool(Arc::new(AgentResultTool::with_name(
+            manager.clone(),
+            "game_agent_result",
+        )))
         .with_tool(Arc::new(AgentSendInputTool::new(
             manager.clone(),
             "game_agent_send",
+        )))
+        .with_tool(Arc::new(AgentAssignTool::new(
+            manager.clone(),
+            "game_agent_assign",
         )))
         .with_tool(Arc::new(AgentWaitTool::new(
             manager.clone(),
@@ -880,6 +890,10 @@ impl ToolRegistryBuilder {
             manager.clone(),
             runtime,
             "game_agent_resume",
+        )))
+        .with_tool(Arc::new(AgentCancelTool::with_name(
+            manager.clone(),
+            "game_agent_cancel",
         )))
         .with_tool(Arc::new(AgentListTool::with_name(
             manager,

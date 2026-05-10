@@ -51,19 +51,21 @@ make sure the workspace's declared `rust-version` is enough to compile.
 ### Documentation
 See README.md for project overview, docs/ARCHITECTURE.md for internals.
 
-### Game TUI planning docs
+### Game TUI docs
 
 - `docs/GAME_TUI_FRAMEWORK_SPEC.md` is the authoritative planning spec for the
-  `deepseek play` Game TUI framework.
+  `deepseek play` Game TUI framework and current Game Console scaffold.
 - `TAKEOVER_PROMPT.md` is only a compact handoff prompt for that effort; keep it
   synchronized with the spec, not the other way around.
 - Game TUI is a TUI-owned framework. Do not reintroduce an external
   Gen-micom runtime dependency, Python CLI dependency, separate terminal app, or
   separate event loop.
-- V1 requires a pure Rust `crates/game` runtime crate with no TUI/ratatui,
+- The current scaffold uses a pure Rust `crates/game` runtime crate with no TUI/ratatui,
   LLM, shell, network, Python, or external runtime dependency.
-- Game commands/tools/config are shipped behavior only when code,
-  localization/help, tests, and the relevant docs are updated together.
+- Treat new game commands, tools, and config as shipped behavior only when code,
+  localization/help, tests, and the relevant docs are updated together. `[game]`
+  config remains a reserved/planned surface until the config loader and
+  `/config` UI use it.
 
 ## Active Code Map
 

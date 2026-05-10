@@ -105,6 +105,11 @@ impl DeepSeekClient {
             request.reasoning_effort.as_deref(),
             self.api_provider,
         );
+        sanitize_thinking_mode_messages(
+            &mut body,
+            &request.model,
+            request.reasoning_effort.as_deref(),
+        );
 
         let url = api_url(&self.base_url, "chat/completions");
         let open_timeout = stream_open_timeout();
@@ -131,9 +136,13 @@ impl DeepSeekClient {
             anyhow::bail!("Failed to call DeepSeek Chat API: HTTP {status}: {error_text}");
         }
 
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
         let response_text = response.text().await.unwrap_or_default();
-        let value: Value =
-            serde_json::from_str(&response_text).context("Failed to parse Chat API JSON")?;
+        let value = parse_chat_response_json(&response_text, status, content_type.as_deref())?;
         parse_chat_message(&value)
     }
 }
@@ -748,6 +757,39 @@ fn deepseek_base_url_supports_strict_tools(base_url: &str) -> bool {
         || trimmed == "https://api.deepseeki.com/v1"
         || trimmed == "https://api.deepseeki.com/beta";
     !is_deepseek || trimmed.ends_with("/beta")
+}
+
+fn parse_chat_response_json(
+    response_text: &str,
+    status: reqwest::StatusCode,
+    content_type: Option<&str>,
+) -> Result<Value> {
+    serde_json::from_str(response_text).with_context(|| {
+        format!(
+            "Failed to parse Chat API JSON (HTTP {status}, content-type {}, body preview: {})",
+            content_type.unwrap_or("<missing>"),
+            response_body_preview(response_text, 512)
+        )
+    })
+}
+
+fn response_body_preview(text: &str, max_chars: usize) -> String {
+    if text.is_empty() {
+        return "<empty>".to_string();
+    }
+    let mut preview: String = text
+        .chars()
+        .take(max_chars)
+        .map(|ch| match ch {
+            '\n' | '\r' | '\t' => ' ',
+            ch if ch.is_control() => ' ',
+            ch => ch,
+        })
+        .collect();
+    if text.chars().count() > max_chars {
+        preview.push_str("...");
+    }
+    preview
 }
 
 fn map_tool_choice_for_chat(choice: &Value) -> Option<Value> {
@@ -1500,6 +1542,32 @@ mod stream_decoder_tests {
             &mut tool_indices,
             true,
         )
+    }
+
+    #[test]
+    fn chat_json_parse_error_includes_response_shape() {
+        let err = parse_chat_response_json(
+            "<html>gateway timeout</html>",
+            reqwest::StatusCode::OK,
+            Some("text/html"),
+        )
+        .expect_err("non-json response should fail");
+        let message = err.to_string();
+
+        assert!(message.contains("Failed to parse Chat API JSON"));
+        assert!(message.contains("HTTP 200 OK"));
+        assert!(message.contains("content-type text/html"));
+        assert!(message.contains("<html>gateway timeout</html>"));
+    }
+
+    #[test]
+    fn chat_json_parse_error_reports_empty_body() {
+        let err =
+            parse_chat_response_json("", reqwest::StatusCode::OK, None).expect_err("empty body");
+        let message = err.to_string();
+
+        assert!(message.contains("content-type <missing>"));
+        assert!(message.contains("body preview: <empty>"));
     }
 
     #[test]

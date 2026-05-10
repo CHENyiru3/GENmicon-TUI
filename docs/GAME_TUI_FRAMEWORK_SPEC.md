@@ -45,6 +45,138 @@ The first milestone is a playable loop:
 7. The save resumes after restart, with sub-agents rebuilt from save summaries
    instead of trusted old transcripts.
 
+## Current Implementation Status
+
+As of 2026-05-09, the repository has the Game Console scaffold needed for the
+next feature branch:
+
+- `crates/game` exists as the pure Rust runtime crate for manifests, driver
+  resolution, saves, lookup, render panels, Starlark driver functions, story
+  playbooks, atomic commits, and scoped agent packs.
+- `deepseek play`, `/play`, `/game status`, `/game render`, `/game choices`,
+  `/game rules`, `/game saves`, `/game dev`, and `/game exit` are wired into
+  the existing TUI through `GameSession`.
+- Player-mode tool registration exposes native `game_*` tools, `load_skill`,
+  and game-scoped `game_agent_*` helpers while excluding normal coding tools.
+- The native game tool surface includes `game_status`, `game_render`,
+  `game_playbook`, `game_lookup`, `game_fact_check`, `game_run_driver`, and
+  `game_commit_turn`.
+- `examples/games/reconciliation-demo` is the minimal galgame proof fixture;
+  `examples/games/thirteen-angry-man` is the first serious-game cartridge
+  scaffold.
+- The reconciliation demo now carries a restartable `AGENTS.json` roster and a
+  Rei NPC skill; the driver's generic `dialogue` default role expands into an
+  individual active-NPC pack such as `dialogue_girlfriend`.
+
+Still reserved or incomplete:
+
+- `[game]` config keys are documented as a future surface but are not yet read by
+  the loader or `/config` UI.
+- The game picker and globally managed driver installation UX are not part of
+  the active scaffold.
+- V1 should not be called complete until the acceptance criteria below have
+  focused tests and the player-facing hiding/dev diagnostics behavior is
+  verified end to end.
+
+## Immersive Game Console Goal
+
+The next player-facing UI branch should rework player-mode Game Console into an
+immersive game screen inside the existing TUI, not a coding/chat cockpit.
+`GameSession` remains the mode carrier; do not add `AppMode::Game`.
+
+The current gap is that `game_render` already returns structured panels, but
+player mode still mostly displays them as transcript text with coding-oriented
+header, footer, and sidebar chrome. The new default player view should project
+game state into a dedicated `GameConsoleWidget` with fixed-ratio ASCII scene
+and figure art, game status, items, tasks or quests, dialogue, choices, and a
+player-action composer.
+
+Key UI behavior:
+
+- render the dedicated `GameConsoleWidget` when
+  `game_player_presentation(app)` is true
+- hide normal coding UI in player mode, including Plan/Todos/Tasks/Agents
+  sidebars, raw tool cells, thinking cells, model/cost/context footer noise,
+  file paths, raw JSON, and coding status labels
+- keep developer mode as the escape hatch: `/game dev on` restores diagnostics,
+  raw render panels, tool activity, save paths, driver info, and sub-agent
+  roster visibility
+- keep normal transcript history for persistence, search, developer mode, and
+  export, but project only player-facing user and assistant turns into the Game
+  Console log
+- use a composer dedicated to player actions, with game-specific placeholder
+  text instead of coding-agent prompt text
+
+The widget should use fixed terminal-cell ratio boxes:
+
+- **Scene plot**: the largest fixed-ratio ASCII canvas, letterboxed or
+  pillarboxed on resize
+- **Figure/portrait**: fixed-ratio active speaker or NPC canvas
+- **Items**: compact inventory and world item window
+- **Status**: player stats, room/vote/pressure metrics, and validation
+  indicator
+- **Tasks**: game-assigned quests, objectives, or story beats, not coding
+  task-manager tasks
+- **Dialogue/log**: latest exchange and last turn consequence
+- **Composer**: player action input only
+
+Responsive tiers:
+
+- **Wide terminals**: scene on the left; figure, status, items, and tasks
+  stacked on the right; dialogue and choices below
+- **Medium terminals**: scene on top; side windows below in columns
+- **Narrow terminals**: single-column fixed-ratio scene followed by compact
+  rotating or tabbed status, items, and tasks
+
+Gameplay must continue if rich art is unavailable. If model-authored ASCII art
+is missing, stale, invalid, or too large for the available tier, the widget
+falls back to deterministic text panels generated from the current render view.
+
+## Scene Music Goal
+
+Game TUI should support optional scene-aware background music because games are
+not only text and visuals; pacing, silence, and ending stingers are part of the
+play surface. Music is optional game presentation data, not game truth.
+
+The first adapter candidate is [`kew`](https://github.com/ravachol/kew), a
+terminal music player described by its project as "Music for the Shell." It
+supports local playback from the command line, `play <path>`, `--noui`, and
+`--quitonstop`, which make it plausible as a background player for scene and
+ending cues. The GitHub project is GPL-2.0 and notes that active development has
+moved to Codeberg, so implementation must treat `kew` as an optional
+locally installed process adapter, not vendored source, linked Rust code, or a
+default shipped dependency.
+
+Music behavior:
+
+- cartridges may declare local music cues for scenes, pressure states, and
+  endings
+- cue selection is driven by designer-authored cue rules, game state, render
+  snapshot, or committed turn metadata
+- the TUI may start, stop, fade, or replace a cue when scene, active story node,
+  pressure tier, or ending changes
+- player mode hides music controls and adapter logs; music is part of the
+  authored presentation, not a player-operated subsystem
+- gameplay, save loading, and rendering must continue when no local audio
+  adapter is installed, when audio is disabled, or when playback fails
+- audio playback is local only in V1: no streaming services, remote URLs,
+  downloads, telemetry, Discord status integration, or hosted music providers
+
+Architecture constraints:
+
+- `crates/game` may validate cue declarations and return cue IDs in render/view
+  data, but it must not spawn audio processes or depend on `kew`
+- the TUI owns adapter lifecycle, process cleanup, cue-level volume application,
+  and developer diagnostics; it must not expose a player-facing music control
+  panel
+- `game_commit_turn` remains the only save writer; accepted cue changes are
+  committed as save-state patch data, while external process state is not
+  authoritative
+- player mode does not expose a model-visible generic music-control tool in V1;
+  cue changes flow through state, render, and commit data
+- developer mode may show adapter name, executable path, current cue, last
+  command status, and playback errors
+
 ## Architecture
 
 Game TUI has four engineering pieces.
@@ -54,15 +186,15 @@ Game TUI has four engineering pieces.
 The implementation should extend current runtime seams rather than fork the
 application:
 
-| Concern | Current first stop | Game TUI direction |
+| Concern | Current first stop | Current Game TUI shape |
 | --- | --- | --- |
-| `deepseek play` dispatch | `crates/cli` and `crates/tui/src/main.rs` | Add a play entrypoint that launches the existing TUI with game session intent. |
-| Slash command metadata/routing | `crates/tui/src/commands/` | Add `/play` and `/game ...` without creating a second command system. |
-| App state and rendering | `crates/tui/src/tui/app.rs`, `tui/ui.rs`, `tui/mod.rs` | Add game session state plus a Game Console presentation profile. |
-| Tool exposure | `crates/tui/src/tools/registry.rs`, `core/engine/tool_setup.rs` | Add a game-safe whitelist for player mode and a wider developer profile. |
-| Skills | `crates/tui/src/skills/`, `skill_state.rs`, `tools/skill.rs` | Reuse skill discovery/loading with game and driver roots. |
-| Sub-agents | `crates/tui/src/tools/subagent/`, `tui/subagent_routing.rs` | Wrap existing sub-agent runtime with game-scoped roles and agent packs. |
-| Persistence | `session_manager.rs`, `runtime_threads.rs`, future `crates/game` | Keep chat/session persistence separate from authoritative game saves. |
+| `deepseek play` dispatch | `crates/cli` and `crates/tui/src/main.rs` | Launches the existing TUI with game session intent. |
+| Slash command metadata/routing | `crates/tui/src/commands/` | `/play` and `/game ...` reuse the normal slash-command system. |
+| App state and rendering | `crates/tui/src/tui/app.rs`, `tui/ui.rs`, `tui/mod.rs` | Uses `GameSession` plus a Game Console presentation/tool profile. |
+| Tool exposure | `crates/tui/src/tools/registry.rs`, `core/engine/tool_setup.rs` | Player mode uses a game-safe whitelist; developer mode can use the wider profile. |
+| Skills | `crates/tui/src/skills/`, `skill_state.rs`, `tools/skill.rs` | Game and driver skill roots feed the existing discovery/loading path. |
+| Sub-agents | `crates/tui/src/tools/subagent/`, `tui/subagent_routing.rs` | `game_agent_*` helpers wrap the existing sub-agent runtime with scoped packs. |
+| Persistence | `session_manager.rs`, `runtime_threads.rs`, `crates/game` | Keep chat/session persistence separate from authoritative game saves. |
 
 ### TUI Game Console
 
@@ -73,6 +205,8 @@ The console owns:
 
 - the main player-facing game engine session
 - Game Console presentation using existing ratatui surfaces
+- a dedicated player widget at `crates/tui/src/tui/widgets/game_console.rs`
+- optional scene-aware background music adapter lifecycle
 - game picker and save picker views
 - `/play` and `/game` slash commands
 - player-facing status/header/footer profile
@@ -81,6 +215,12 @@ The console owns:
 
 V1 must not add `AppMode::Game`; use `GameSession` plus presentation and
 tool-profile state.
+
+The TUI render path should branch in `crates/tui/src/tui/ui.rs` so player-mode
+Game Console uses `GameConsoleWidget` instead of the normal `ChatWidget` plus
+coding sidebar. After successful `game_render` and `game_commit_turn` tool
+results, the app should refresh `app.game_session` panels and player-view data
+by parsing the returned JSON from `ToolResult.content`.
 
 ### Game Runtime Core
 
@@ -111,7 +251,8 @@ Required `crates/game` module boundaries:
 - `save`: load, validate, patch, and atomically write `STATE.json` and
   `TURN_LOG.jsonl`
 - `lookup`: resolve content handles and bounded text queries
-- `render`: produce structured render panel data from state and templates
+- `render`: produce structured render panel data and additive player-view
+  snapshots from state and templates, including optional music cue IDs
 - `script`: execute declared Starlark functions in a deterministic sandbox
 - `agents`: build scoped game-agent packs from save slices and driver topology
 - `demo`: test fixture helpers for the V1 demo cartridge
@@ -121,6 +262,22 @@ canonicalize paths under the active game root or driver root, reject traversal,
 reject undeclared driver files, and treat all markdown content as untrusted text
 for the model rather than executable instructions. Game package data can
 instruct the game world, but it must not expand the player's tool surface.
+
+The `render` module should keep the existing structured panel output and add a
+player-view snapshot for the immersive widget. Additive render interfaces:
+
+- new panel kinds: `figure`, `items`, `status`, and `tasks`
+- `AsciiArtFrame`: one validated terminal-cell art frame with declared columns,
+  rows, lines, and a fixed cell ratio
+- `AsciiArtVariant`: a size or tier-specific frame candidate for scene or
+  figure art
+- `GameViewSnapshot`: player-facing scene, figure, items, status, tasks,
+  dialogue, choices, validation, optional ASCII art data, and optional music
+  cue data for the current save revision
+
+`game_render` should return both the existing panels and the new view object so
+developer mode, compatibility tests, and future exporters can continue reading
+the original panel model while player mode reads the richer snapshot.
 
 ### Game Driver
 
@@ -134,6 +291,7 @@ Drivers define:
 - deterministic Starlark scripts for calculations
 - save/state schema extensions
 - default render panel templates
+- default music cue policy
 - default scoped sub-agent topology
 - sub-agent role prompts and output contracts
 - NPC skill generation/update policy
@@ -189,6 +347,8 @@ Planned package shape:
     actors/
     items/
     lore/
+  assets/
+    music/
   saves/
     <save-id>/
       STATE.json
@@ -241,6 +401,25 @@ roots = ["content"]
 
 [saves]
 root = "saves"
+
+[audio]
+enabled = false
+assets = "assets/music"
+adapter = "kew"
+
+[[audio.cues]]
+id = "scene_default"
+file = "assets/music/scene_default.flac"
+scope = "scene"
+loop = true
+volume = 60
+
+[[audio.cues]]
+id = "ending_success"
+file = "assets/music/ending_success.flac"
+scope = "ending"
+loop = false
+volume = 70
 ```
 
 Rules:
@@ -252,6 +431,14 @@ Rules:
 - `driver.id` names a globally installed driver.
 - `driver.version` is a semver requirement resolved at game launch.
 - content and save paths must resolve under the game root.
+- audio asset paths must resolve under the game root and must be local files,
+  not URLs.
+- cue IDs are stable game data. Missing optional audio files warn and disable
+  the affected cue rather than failing the game.
+- cue volume and loop behavior are designer-authored cue properties, not
+  player-facing controls.
+- `audio.adapter = "kew"` declares a preferred adapter only. The runtime must
+  still work when no adapter is installed or configured.
 - missing optional files produce warnings, not crashes.
 
 Saves must record the concrete resolved driver version. A game can accept a
@@ -360,6 +547,16 @@ simple but structured:
   "interaction": {
     "mode": "choice_and_freeform",
     "freeform_allowed": true,
+    "skills": [
+      {
+        "id": "chat",
+        "label": "Chat",
+        "skill": "game-action-chat",
+        "description": "Player speech and dialogue.",
+        "freeform": true,
+        "aliases": ["say", "ask", "tell"]
+      }
+    ],
     "verbs": [],
     "suggestions": []
   },
@@ -381,7 +578,23 @@ simple but structured:
     "nodes": {}
   },
   "ui": {
-    "panels": []
+    "panels": [],
+    "ascii": {
+      "source_revision": 0,
+      "scene_art": [],
+      "figure_art": [],
+      "ratios": {
+        "scene": {"cols": 4, "rows": 3},
+        "figure": {"cols": 1, "rows": 1}
+      },
+      "variants": []
+    },
+    "music": {
+      "source_revision": 0,
+      "active_cue": "",
+      "scene_cue": "",
+      "ending_cue": null
+    }
   },
   "agents": {
     "topology": "dynamic-main-plus-managers",
@@ -406,6 +619,9 @@ Runtime reliability rules:
 - each playable save should carry enough `plot`, `cast`, and `conversation`
   data to establish what happened, who is present, what they want, and what was
   just said before showing choices
+- game entry is language-gated before the TUI session starts: launch accepts
+  `--lang en|zh`, interactive launches may prompt before opening the TUI, and
+  the first player-facing beat should begin directly in the selected language
 - malformed interaction/story edges should surface as `game_playbook` warnings
   instead of crashing normal play
 - every successful player action commits at most one turn
@@ -419,6 +635,20 @@ Runtime reliability rules:
   either continue conservatively or explain why the action cannot resolve yet
 - after a major branch move, update suggestions so the next turn remains
   playable without hidden knowledge
+- update recommended/suggested choices only when the story is drifting in the
+  wrong direction or the player needs a slight reorientation; never expose
+  hidden gates, exact scores, best routes, or decisive route-solving hints
+- `ui.ascii` stores accepted model-authored ASCII art under save state with the
+  source revision, scene art, figure art, fixed terminal-cell ratios, and one or
+  more size variants
+- ASCII art is a render cache owned by the save state, not separate authority;
+  if it is stale or invalid, gameplay continues with deterministic render
+  panels
+- `ui.music` records the intended cue state for resume and rendering, but the
+  external audio process is never authoritative and can be restarted or ignored
+  without changing game truth
+- scene and ending cue changes should be committed with the same turn patch that
+  changes the story node, pressure tier, or ending status
 
 `TURN_LOG.jsonl` is append-only. Each line records one committed turn:
 
@@ -471,8 +701,11 @@ The model does not provide `turn_id`, `revision_after`, or `created_at`.
 
 Commit rules:
 
-- `game_commit_turn` must require `expected_revision`, `player_input`,
-  `resolution`, and an RFC 7396 JSON Merge Patch as `state_patch`.
+- `game_commit_turn` appends only when it has `player_input` and `resolution`.
+  `expected_revision` is inferred from the active save when omitted, and
+  `state_patch` may be omitted for an empty patch.
+- `game_commit_turn` must run the same continuity fact gate before writing and
+  refuse blocked claims without mutating the save.
 - `metadata` and `driver_results` are optional JSON objects recorded in the
   turn log when provided.
 - A stale revision fails without writing.
@@ -484,6 +717,16 @@ Commit rules:
   post-commit derived artifacts and can be rebuilt from the save truth.
 - Sub-agent transcripts are disposable. Restart uses `STATE.json`,
   `AGENTS.json`, summaries, and NPC skill overlays to recreate scoped agents.
+
+ASCII validation rules:
+
+- line count must match the declared row count
+- each line must fit the declared column count in terminal cells
+- ANSI escape sequences are forbidden
+- excessive Unicode width falls back to sanitized ASCII
+- oversized variants are rejected rather than wrapped
+- invalid or missing variants fall back to deterministic text panels without
+  blocking the turn loop
 
 ## Skills Integration
 
@@ -547,11 +790,22 @@ Baseline serious-game topology:
 - **NPC Manager Sub-Agent A/B/C**: each controls one or several NPCs and
   proposes dialogue, reactions, emotional state, memories, and character
   actions.
+- **Render Artist Sub-Agent**: proposes fixed-size JSON ASCII art variants for
+  the current scene and active speaker or NPC. It is spawned through the
+  existing `game_agent_spawn` surface, never writes save state, and returns
+  proposals for the main session to validate and commit.
 
 The baseline topology has five manager roles, but V1 must not force exactly five
 active child agents every turn. The driver declares allowed roles, default
 roles, and a maximum active count. The main game engine session chooses the
 needed subset per scene and turn.
+
+For small character scenes, a driver may declare a generic `dialogue` role. The
+runtime expands that role into per-active-NPC packs, for example
+`dialogue_girlfriend` for Rei in the reconciliation demo. These packs include
+only the NPC's cast slice, relevant scene/conversation/backstory facts, allowed
+content files, and NPC skill path. This keeps a named character from being
+handled by a generic role with no character-specific memory.
 
 Sub-agent rules:
 
@@ -564,6 +818,18 @@ Sub-agent rules:
 - old sub-agent transcripts are not required for reload
 - game sub-agents are accessed through `game_agent_*` helpers, not generic
   `agent_spawn` in player mode
+- `game_agent_spawn` must bind to a declared generated pack such as
+  `dialogue_girlfriend` when packs are available, so active NPC dialogue does
+  not fall back to an unscoped generic worker
+- `render_artist` may use only game-safe read tools: `game_status`,
+  `game_render`, `game_lookup`, `game_fact_check`, `game_run_driver`, and
+  `load_skill`
+- `render_artist` returns JSON ASCII proposals only and cannot call
+  `game_commit_turn`
+- the main game session automatically asks `render_artist` for proposals when
+  art is missing, stale, or the scene or active speaker changes
+- accepted art is stored by the main session through the same
+  `game_commit_turn` state patch as the turn resolution
 
 Each sub-agent receives a generated agent pack instead of the whole game:
 
@@ -588,6 +854,7 @@ player input
   -> state manager checks mechanical constraints when needed
   -> plot manager suggests plot guardrails when needed
   -> relevant NPC managers propose actions/dialogue when needed
+  -> render artist proposes ASCII scene/figure variants when needed
   -> Game Driver runs declared deterministic Starlark functions when needed
   -> main session resolves final narration and UI output
   -> game_commit_turn commits authoritative state
@@ -618,15 +885,19 @@ V1 tools:
 | `game_render` | Return structured panel data from current save | No |
 | `game_playbook` | Return current commands, suggested choices, and story branch nodes | No |
 | `game_lookup` | Retrieve bounded package content by handle or query | No |
+| `game_fact_check` | Check an action or proposed narration against continuity facts | No |
 | `game_run_driver` | Run a declared deterministic driver function | No |
-| `game_commit_turn` | Append one turn and apply a JSON Merge Patch | Yes |
+| `game_commit_turn` | Append one turn and apply a JSON Merge Patch | Auto in player mode |
 
 Allowed support tools:
 
 - `load_skill` or a game-scoped equivalent for game skills
-- `game_agent_spawn`, `game_agent_send`, `game_agent_wait`,
-  `game_agent_resume`, and `game_agent_list`, restricted to declared driver
+- `game_agent_spawn`, `game_agent_wait`, `game_agent_result`,
+  `game_agent_send`, `game_agent_resume`, `game_agent_assign`,
+  `game_agent_cancel`, and `game_agent_list`, restricted to declared driver
   roles and generated agent packs
+- `render_artist` as a game-scoped role, restricted to game-safe read tools and
+  JSON ASCII proposal output
 - user input tool if needed by existing engine flow
 
 Do not add a model-visible `game_parallel` wrapper in V1. DeepSeek supports
@@ -653,12 +924,26 @@ commands, while the cartridge framework preserves state, branch gates, and
 consequences. Players can repeat the guide at any time with `/skill rule-repeat`
 or `/game rules`.
 
+Normal player mode must hide model thinking and game tool-call transcript cells.
+The player should see the scene, dialogue, choices, and consequences, not the
+engine's lookup, driver, fact-check, or commit plumbing. `/game dev on` may
+expose diagnostics for cartridge authors.
+
+Free-form actions are allowed, but they do not get to rewrite established
+continuity. When a player action introduces a new biology, identity, family,
+legal, location, or backstory fact, the agent must run the fact gate before
+narrating or committing the turn. If the gate blocks the claim, the game should
+ask for revision or handle it as an impossible/false in-world statement, not
+make it true.
+
 ### Tool ABIs
 
-`game_playbook` has no input. It returns the active save's current command
-verbs, suggested choices, active branch/head, story style profile, and visible
-story nodes so the model can route player input without re-reading the entire
-save.
+`game_playbook` has no input. It returns the active save's declared action
+skills, current command verbs, suggested choices, active branch/head, story
+style profile, and visible story nodes so the model can route player input
+without re-reading the entire save. When action skills are present, every
+player action must be distilled to one declared action skill; free-form wording
+is allowed inside a skill, not outside the skill set.
 
 `game_lookup` input:
 
@@ -679,6 +964,24 @@ or JSON pointers such as `/world/flags`. Empty calls return a compact usage guid
 instead of failing. The default return budget is 16 KiB; the hard per-call cap is
 32 KiB. Content results are compact excerpts with source handles, never raw
 unbounded files.
+
+`game_fact_check` input:
+
+```json
+{
+  "player_action": "其实我怀了你的孩子。",
+  "resolution": "optional proposed narration"
+}
+```
+
+The tool checks the action and optional proposed narration against active-save
+continuity facts and cartridge-defined `/facts/fact_gate/rules`. It returns
+`allowed`, `hard_block`, flags, a reason, and a correction. It should run before
+narrating or committing free-form actions that introduce new biology, identity,
+family, legal, location, or backstory facts. Blocked claims must not be
+committed as truth. A cartridge can define generic rule patterns, `block_if`
+state predicates, and `unless_path` exceptions in save state; this is a
+workflow-level gate, not a one-off lie detector.
 
 `game_run_driver` input:
 
@@ -728,9 +1031,11 @@ saves, read files, run shell commands, or access the network.
 }
 ```
 
-The runtime validates `expected_revision`, applies `state_patch` as RFC 7396
-JSON Merge Patch, validates the resulting state, appends one turn-log line, and
-writes the new state atomically from the caller's point of view.
+The runtime infers `expected_revision` when omitted, runs the continuity fact
+gate, applies `state_patch` as RFC 7396 JSON Merge Patch, validates the
+resulting state, appends one turn-log line, and writes the new state atomically
+from the caller's point of view. If the fact gate blocks the turn, the tool
+returns a non-mutating block result instead of writing.
 
 Game tools are part of the model-visible surface only when an active
 `GameSession` exists. Any future ABI change must update `docs/TOOL_SURFACE.md`,
@@ -756,7 +1061,7 @@ Slash commands:
 /game exit
 ```
 
-Config:
+Reserved config:
 
 ```toml
 [game]
@@ -767,9 +1072,24 @@ developer_mode = false
 
 [game.drivers]
 roots = ["~/.deepseek/game-drivers"]
+
+[game.audio]
+enabled = false
+adapter = "none"
+kew_path = ""
 ```
 
-Resolution order:
+The config keys are part of the V1 target surface but are not yet read by the
+current loader or `/config` UI. Current launch resolution is explicit CLI/slash
+argument first, then the current workspace if it contains `game.toml`; driver
+lookup checks the game package's local `drivers/` directory and
+`~/.deepseek/game-drivers`.
+
+`[game.audio]` is an adapter capability setting only. It must not become a
+player-facing music-control surface; cue choice, loop behavior, and cue volume
+belong to the cartridge designer and committed game state.
+
+Target resolution order:
 
 1. CLI flags
 2. slash command arguments
@@ -786,21 +1106,40 @@ can provide roots and defaults, but cannot enable developer mode. Persistent
 
 Player mode should feel like a game console, not a coding-agent cockpit.
 
-Default player view:
+Default player view is `GameConsoleWidget`:
 
-- scene panel
-- player/state panel
-- goals/quests panel
-- recent turn log excerpt
-- compact validation indicator
-- composer for player actions
+- game language is selected before TUI startup and is limited to English or
+  Chinese; scene, dialogue, choices, and panel labels align to that selection
+- scene/background panel for the current scene and opening context; the opening
+  must always restate the background story in the selected language
+- fixed-ratio active figure or portrait ASCII canvas
+- compact status panel with player stats, room/vote/pressure metrics, and
+  validation indicator
+- compact inventory/world items panel
+- game tasks panel for quests, objectives, and story beats
+- scrollable dialogue/log panel for the current chat history; the dialogue
+  panel remains visible during tool use and turn resolution
+- dialogue/log content should stay limited to live chat, immediate narration,
+  and the latest in-character response; status, tasks, items, choices, scene,
+  and story context belong in their own visible panels and should not be
+  duplicated in Dialogue
+- if the dialogue panel is rendered as plain text, game narration must not emit
+  Markdown-only headings, horizontal rules, bold markers, or raw Markdown lists
+  into that panel
+- choice list when available
+- composer for player actions only
 
 Hidden by default:
 
 - Plan/Agent/YOLO controls as active gameplay controls
-- coding-agent tool details
-- raw prompts
-- raw JSON
+- Plan/Todos/Tasks/Agents sidebar content
+- coding-agent tool details and raw tool cells
+- model thinking cells
+- model/cost/context footer noise
+- coding status labels
+- raw prompts, raw render JSON, and other raw JSON
+- music controls and music cue picker
+- audio adapter command output
 - file paths unless relevant to player-facing errors
 
 Developer view:
@@ -813,6 +1152,11 @@ Developer view:
 - sub-agent roster and summaries
 - turn log viewer
 - render panel debug view
+- raw render panels and player-view JSON
+- tool activity and hidden transcript cells
+- audio adapter diagnostics, executable path, current cue, and last playback
+  error
+- designer-authored cue rules and committed cue state
 - tool exposure summary
 
 Game Console is a presentation and tool-profile state, not a fourth
@@ -835,18 +1179,27 @@ The first implementation should prove this flow:
 8. Engine sends the action with game context and restricted tools.
 9. Model may call `game_lookup`, `game_render`, `game_run_driver`, and
    `game_agent_*` helpers.
-10. The LLM makes the objective narrative judgment; Starlark handles declared
+10. If scene or speaker art is missing or stale, the main session may ask the
+    `render_artist` game agent for JSON ASCII proposals.
+11. The LLM makes the objective narrative judgment; Starlark handles declared
     deterministic state math or complex calculation.
-11. Model calls `game_commit_turn` with resolution, expected revision, and
-    JSON Merge Patch.
-12. Runtime updates save files and refreshes summaries/NPC skills when needed.
-13. TUI refreshes panels and displays the result.
-14. Restarting `deepseek play` resumes from the updated save and reconstructs
+12. Model calls `game_commit_turn` with resolution, expected revision, and
+    JSON Merge Patch, including accepted ASCII art and music cue updates when
+    applicable.
+13. Runtime updates save files and refreshes summaries/NPC skills when needed.
+14. TUI refreshes panels, player-view snapshot, ASCII art, status, items, and
+    tasks from tool results.
+15. If audio is enabled, the TUI reconciles the active local music adapter with
+    the committed cue state.
+16. Restarting `deepseek play` resumes from the updated save and reconstructs
    sub-agents from saved summaries.
 
 ## V1 Implementation Slices
 
-Keep slices independently testable:
+Keep slices independently testable. The current scaffold has landed the core
+runtime, entrypoints, native tools, player profile wiring, and demo cartridges;
+future branches should verify and complete the remaining gaps rather than
+recreate those pieces.
 
 1. **Spec and docs**: keep this document, `TAKEOVER_PROMPT.md`, and related
    architecture/tool/config/sub-agent docs aligned before code lands.
@@ -856,11 +1209,21 @@ Keep slices independently testable:
    path and save validation are in place.
 4. **CLI and slash command entrypoints**: route `deepseek play`, `/play`, and
    `/game ...` into existing TUI state.
-5. **Player presentation and tool profile**: expose only game-safe tools by
-   default; make developer mode visually distinct.
-6. **Scoped sub-agents**: generate agent packs and role-specific helpers after
+5. **Immersive player presentation and tool profile**: add
+   `crates/tui/src/tui/widgets/game_console.rs`, branch `tui/ui.rs::render`
+   into it for player mode, expose only game-safe tools by default, and make
+   developer mode visually distinct.
+6. **Render snapshot and ASCII cache**: extend `crates/game::render` with
+   player-view DTOs, validate ASCII variants, and refresh `GameSession` from
+   `game_render` and `game_commit_turn` tool results.
+7. **Scoped sub-agents**: generate agent packs and role-specific helpers after
    the runtime can produce stable save slices.
-7. **Demo cartridge**: add one local galgame fixture that proves load, play,
+8. **Render artist role**: add `render_artist` as a game-scoped sub-agent role
+   that can propose JSON ASCII art but cannot commit state.
+9. **Optional music adapter**: add manifest cue validation, player-view cue
+   projection, TUI-side adapter lifecycle, and a `kew` process adapter behind
+   disabled-by-default config.
+10. **Demo cartridge**: add one local galgame fixture that proves load, play,
    save, restart, driver function calls, and sub-agent reconstruction.
 
 ## V1 Demo Cartridge
@@ -955,6 +1318,16 @@ Runtime crate tests:
 - save state loads and validates
 - missing optional files produce warnings
 - render panels are generated from state
+- `render_panels` and `game_render` produce scene, figure, status, items,
+  tasks, dialogue, and choices from the galgame demo and the serious-game
+  cartridge scaffold
+- `game_render` returns both existing render panels and the additive
+  `GameViewSnapshot`
+- ASCII art validation accepts exact-size variants and rejects wrong row counts,
+  over-wide lines, ANSI escapes, excessive Unicode width, and oversized variants
+  without wrapping
+- audio cue validation accepts only local paths under the game root and rejects
+  traversal, remote URLs, and missing cue IDs
 - lookup cannot escape game root
 - lookup returns compact excerpts with the default 16 KiB budget and hard 32
   KiB cap
@@ -987,6 +1360,25 @@ TUI and engine tests:
 - restart resumes the committed save and rebuilds sub-agent context from
   summaries
 - project config cannot persistently enable `game.developer_mode`
+- fixed-ratio layout fitting covers small, medium, and wide `Rect`s with no
+  overlap and no overflow
+- `GameConsoleWidget` buffer tests cover representative terminal sizes:
+  60x20, 90x28, and 140x40
+- player-mode UI tests assert coding sidebar/header/footer details are hidden
+  and game panels are visible
+- developer-mode UI tests assert diagnostics, raw state, raw render panels,
+  tool activity, save paths, driver info, and sub-agent roster visibility return
+- tool-result refresh tests assert `game_commit_turn` updates displayed
+  revision, panels, ASCII art, status, items, and tasks
+- audio refresh tests assert scene and ending cue changes are read from
+  committed state and do not require transcript scraping
+- adapter tests assert the `kew` integration is disabled by default, uses only a
+  configured local executable, hides UI with `--noui` when available, cleans up
+  child processes, and degrades cleanly when playback fails
+- player-mode UI tests assert there is no music control panel, cue picker,
+  player mute toggle, or player volume control
+- sub-agent tests assert `render_artist` can use only game-safe read tools and
+  cannot call `game_commit_turn`
 
 V1 acceptance:
 
@@ -996,6 +1388,12 @@ V1 acceptance:
 - player mode hides coding-agent controls by default
 - game skills can shape rules and voice
 - a game can bind to a versioned driver
+- default player mode is the immersive Game Console view, with developer mode as
+  the diagnostics escape hatch
+- invalid or missing ASCII art never blocks gameplay; deterministic text panels
+  remain usable
+- invalid or unavailable music never blocks gameplay; audio is an optional local
+  presentation layer
 - the default serious-game topology supports one main session plus five manager
   roles, but the runtime activates only the needed driver-bounded subset per
   scene
@@ -1009,6 +1407,8 @@ V1 acceptance:
 - no visual asset pipeline
 - no multiplayer
 - no hosted game marketplace
+- no bundled commercial music or remote music service integration
+- no required background music player dependency for normal play
 - no game authoring wizard
 - no dependency on external markdown game repositories
 - no generic database backend
@@ -1023,6 +1423,7 @@ scope:
 - migration between driver versions
 - hosted game marketplace or driver registry
 - visual asset pipeline beyond terminal panels and ASCII-style render data
+- cross-platform audio abstraction beyond the optional local adapter contract
 - authoring wizard for new cartridges
 - multiplayer or shared saves
 - generic genre-complete mechanics beyond the first galgame demo

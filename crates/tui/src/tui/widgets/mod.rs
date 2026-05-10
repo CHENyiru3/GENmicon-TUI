@@ -1,4 +1,5 @@
 mod footer;
+mod game_console;
 mod header;
 // Some helpers (`shift`, `ctrl_alt`, `is_press`, etc.) are part of the
 // public surface for issue #93's help overlay and future call sites; allow
@@ -17,6 +18,7 @@ pub mod tool_card;
 pub use footer::{
     FooterProps, FooterToast, FooterWidget, footer_agents_chip, footer_working_label,
 };
+pub use game_console::GameConsoleWidget;
 pub use header::{HeaderData, HeaderWidget};
 pub use renderable::Renderable;
 
@@ -477,6 +479,51 @@ impl<'a> ComposerWidget<'a> {
         }
     }
 
+    fn is_game_player_presentation(&self) -> bool {
+        self.app
+            .game_session
+            .as_ref()
+            .is_some_and(|session| !session.developer_mode())
+    }
+
+    fn title_text(&self, is_draft_mode: bool) -> String {
+        if self.app.is_history_search_active() {
+            self.app
+                .tr(crate::localization::MessageId::HistorySearchTitle)
+                .to_string()
+        } else if is_draft_mode {
+            "Draft".to_string()
+        } else if self.is_game_player_presentation() {
+            match self.app.active_skill_name.as_deref() {
+                Some(name) => format!("Action /skill {name}"),
+                None => "Action".to_string(),
+            }
+        } else {
+            "Composer".to_string()
+        }
+    }
+
+    fn placeholder_text(&self) -> String {
+        if self.app.is_history_search_active() {
+            self.app
+                .tr(crate::localization::MessageId::HistorySearchPlaceholder)
+                .to_string()
+        } else if self.is_game_player_presentation() {
+            match self.app.active_skill_name.as_deref() {
+                Some(name) => {
+                    format!("Type the content for /skill {name}; Enter sends this action.")
+                }
+                None => {
+                    "Type a player action, dialogue, choice number, or /game rules.".to_string()
+                }
+            }
+        } else {
+            self.app
+                .tr(crate::localization::MessageId::ComposerPlaceholder)
+                .to_string()
+        }
+    }
+
     fn max_height_cap(&self) -> u16 {
         composer_max_height(self.app.composer_density)
     }
@@ -595,14 +642,7 @@ impl Renderable for ComposerWidget<'_> {
 
             let mut block = Block::default()
                 .title(Line::from(Span::styled(
-                    if self.app.is_history_search_active() {
-                        self.app
-                            .tr(crate::localization::MessageId::HistorySearchTitle)
-                    } else if is_draft_mode {
-                        "Draft"
-                    } else {
-                        "Composer"
-                    },
+                    self.title_text(is_draft_mode),
                     Style::default().fg(palette::TEXT_MUTED),
                 )))
                 .borders(Borders::ALL)
@@ -632,15 +672,9 @@ impl Renderable for ComposerWidget<'_> {
 
         let mut input_lines = Vec::new();
         if input_text.is_empty() {
-            let placeholder = if self.app.is_history_search_active() {
-                self.app
-                    .tr(crate::localization::MessageId::HistorySearchPlaceholder)
-            } else {
-                self.app
-                    .tr(crate::localization::MessageId::ComposerPlaceholder)
-            };
+            let placeholder = self.placeholder_text();
             input_lines.push(Line::from(Span::styled(
-                placeholder,
+                placeholder.clone(),
                 Style::default().fg(palette::TEXT_MUTED).italic(),
             )));
         } else {
@@ -657,14 +691,8 @@ impl Renderable for ComposerWidget<'_> {
         // wrap the single Line at render time, so we must estimate the wrapped
         // row count ourselves to keep padding accurate on narrow widths.
         let visual_rows = if input_text.is_empty() {
-            let placeholder = if self.app.is_history_search_active() {
-                self.app
-                    .tr(crate::localization::MessageId::HistorySearchPlaceholder)
-            } else {
-                self.app
-                    .tr(crate::localization::MessageId::ComposerPlaceholder)
-            };
-            placeholder_visual_lines_for(placeholder, content_width)
+            let placeholder = self.placeholder_text();
+            placeholder_visual_lines_for(&placeholder, content_width)
         } else {
             input_lines.len()
         };
@@ -938,14 +966,8 @@ impl Renderable for ComposerWidget<'_> {
         let (visible_lines, cursor_row, cursor_col) =
             layout_input(input_text, input_cursor, content_width, input_rows_budget);
         let visual_rows = if input_text.is_empty() {
-            let placeholder = if self.app.is_history_search_active() {
-                self.app
-                    .tr(crate::localization::MessageId::HistorySearchPlaceholder)
-            } else {
-                self.app
-                    .tr(crate::localization::MessageId::ComposerPlaceholder)
-            };
-            placeholder_visual_lines_for(placeholder, content_width)
+            let placeholder = self.placeholder_text();
+            placeholder_visual_lines_for(&placeholder, content_width)
         } else {
             visible_lines.len()
         };
@@ -1948,6 +1970,8 @@ pub(crate) struct SlashMenuEntry {
     pub is_skill: bool,
 }
 
+const GAME_ACTION_SKILL_DESCRIPTION_PREFIX: &str = "Game action:";
+
 pub(crate) fn slash_completion_hints(
     input: &str,
     limit: usize,
@@ -2016,7 +2040,23 @@ pub(crate) fn slash_completion_hints(
         }
     }
 
-    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    let prioritize_game_actions = prefix.starts_with("skill");
+    entries.sort_by(|a, b| {
+        let rank = |entry: &SlashMenuEntry| -> u8 {
+            if prioritize_game_actions
+                && entry
+                    .description
+                    .starts_with(GAME_ACTION_SKILL_DESCRIPTION_PREFIX)
+            {
+                0
+            } else if entry.is_skill {
+                2
+            } else {
+                1
+            }
+        };
+        rank(a).cmp(&rank(b)).then_with(|| a.name.cmp(&b.name))
+    });
     entries.dedup_by(|a, b| a.name == b.name);
     entries.into_iter().take(limit).collect()
 }
@@ -2416,6 +2456,28 @@ mod tests {
         assert_eq!(hints.len(), 1);
         assert_eq!(hints[0].name, "/skill my-review");
         assert!(hints[0].is_skill);
+    }
+
+    #[test]
+    fn slash_completion_hints_prioritize_game_action_skills_for_skill_command() {
+        let cached_skills = vec![
+            (
+                "academic-writing-editor".to_string(),
+                "Edit prose".to_string(),
+            ),
+            (
+                "chat".to_string(),
+                "Game action: Chat - say something".to_string(),
+            ),
+            (
+                "reflection".to_string(),
+                "Game action: Reflection - rethink".to_string(),
+            ),
+        ];
+        let hints = slash_completion_hints("/skill", 128, &cached_skills, Locale::En);
+
+        assert_eq!(hints[0].name, "/skill chat");
+        assert_eq!(hints[1].name, "/skill reflection");
     }
 
     #[test]

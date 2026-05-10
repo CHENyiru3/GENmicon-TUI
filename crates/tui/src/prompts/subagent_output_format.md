@@ -1,21 +1,34 @@
-## Output contract (mandatory)
+## Output Contract (Mandatory)
 
-When you finish (success or blocked), your final assistant message MUST end with
-the structured report below. Use these exact section headings as Markdown
-H3s. Skip a section only when the rule under that heading explicitly allows
-"omit" — never omit a heading without that escape, and never invent extra
-sections.
+When you finish (success, partial success, or blocked), your final assistant
+message MUST be exactly the structured report below: no preamble, no casual
+closing sentence, and no extra headings. Use these exact Markdown H3 headings in
+this exact order:
+
+1. `### SUMMARY`
+2. `### EVIDENCE`
+3. `### CHANGES`
+4. `### RISKS`
+5. `### BLOCKERS`
 
 ### SUMMARY
-One paragraph. Plain prose. State what you did and the headline conclusion. No
-hedging, no preamble. If you were blocked, say so on the first line.
+Start with `Outcome: DONE`, `Outcome: PARTIAL`, `Outcome: BLOCKED`, or
+`Outcome: FAILED`. Then write one short paragraph in plain prose stating what
+you did and the headline conclusion. If you were blocked, name the blocker in
+that paragraph.
 
 ### EVIDENCE
 Bullet list. Each bullet is one concrete artifact you observed: a file path
-with a line range, a tool result key, a command + exit code, a search hit. Cite
-only what you actually read or executed; do not paraphrase from memory. Format
-file refs as `path/to/file.rs:120-145`. Omit this section only if the task was
-purely generative and you observed nothing (rare).
+with a line range, a tool result key, a command plus exit code, or a search hit.
+Cite only what you actually read or executed; do not paraphrase from memory.
+Use one of these shapes:
+
+- `path/to/file.rs:120-145 - finding`
+- `command: cargo test -p crate_name (exit 0) - observation`
+- `tool: game_lookup scene/main - observation`
+
+If the task was purely generative and you observed nothing, write
+`None observed.` rather than omitting the heading.
 
 ### CHANGES
 Bullet list of every write you performed: files created, files edited, patches
@@ -30,17 +43,17 @@ matters, and one line on what would mitigate it. If you saw nothing
 risk-worthy, write "None observed." — do not delete the heading.
 
 ### BLOCKERS
-Use this section only when you stopped without finishing the assigned task.
-Each bullet: the blocker, the specific information or capability you would
-need to proceed, and (if relevant) the most plausible 1–2 next steps the
-parent could take. If you completed the task, write "None." — do not delete
-the heading.
+Each bullet is a blocker that stopped or limited the assignment: the blocker,
+the specific information or capability you would need to proceed, and the most
+plausible next step for the parent. If you completed the task, write `None.` -
+do not delete the heading.
 
 ## Stop condition
 
-Produce the structured report and stop. Do not propose follow-up tasks, do not
-ask the parent what to do next, do not start a new line of investigation. The
-parent will decide whether to spawn additional work based on your report.
+Produce the structured report and stop. Do not propose follow-up tasks outside
+RISKS or BLOCKERS, do not ask the parent what to do next, and do not start a new
+line of investigation. The parent will decide whether to spawn additional work
+based on your report.
 
 The single exception: if the assigned task is impossible to make progress on
 without a clarification only the parent can provide, fill BLOCKERS with the

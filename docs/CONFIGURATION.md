@@ -508,15 +508,16 @@ Method semantics:
 
 Windows users who run inside a known OSC-9 terminal (e.g. WezTerm on Windows) keep getting OSC-9 notifications; the `off` fallback only applies when no recognised `TERM_PROGRAM` is detected.
 
-### Planned Game TUI configuration
+### Game TUI configuration status
 
-Game TUI configuration is planned in
-[`GAME_TUI_FRAMEWORK_SPEC.md`](GAME_TUI_FRAMEWORK_SPEC.md), but the keys are not
-active until the `deepseek play` implementation lands. Do not present these as
-accepted production config before the config loader, `/config` UI, docs, and
-tests are updated together.
+`deepseek play`, `/play`, `/game ...`, and the native `game_*` tool profile are
+active Game Console scaffold behavior. The `[game]` config table below is still
+reserved: the current loader does not read these keys for game selection,
+driver roots, or developer mode. Do not present them as accepted production
+config before the config loader, `/config` UI, docs, and tests are updated
+together.
 
-Planned shape:
+Reserved shape:
 
 ```toml
 [game]
@@ -529,13 +530,17 @@ developer_mode = false
 roots = ["~/.deepseek/game-drivers"]
 ```
 
-Intended resolution order is CLI flags, slash command arguments, `[game]`
-config, current workspace `game.toml`, then the game picker.
+Current launch resolution is explicit CLI/slash argument first, then the current
+workspace if it contains `game.toml`. Driver lookup checks the game package's
+local `drivers/` directory and `~/.deepseek/game-drivers`.
+
+The intended future resolution order remains CLI flags, slash command
+arguments, `[game]` config, current workspace `game.toml`, then the game picker.
 
 Project config may provide game roots and defaults, but it must not
 persistently enable developer mode. `game.developer_mode = true` is honored only
-from user/global config; `--dev` and `/game dev` are per-launch or per-session
-overrides.
+from user/global config once the reserved keys are implemented. Today, `--dev`
+and `/game dev` are per-launch or per-session overrides.
 
 ### Parsed but currently unused (reserved for future versions)
 

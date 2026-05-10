@@ -5,6 +5,9 @@ use serde_json::{Map, Value};
 pub struct Playbook {
     pub mode: String,
     pub freeform_allowed: bool,
+    pub recommendation_policy: String,
+    #[serde(default)]
+    pub action_skills: Vec<ActionSkill>,
     pub plot: Option<PlotBrief>,
     pub scene: Option<SceneBrief>,
     pub actors: Vec<ActorBrief>,
@@ -88,6 +91,16 @@ pub struct ActionVerb {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActionSkill {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub skill: String,
+    pub freeform: bool,
+    pub aliases: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ActionSuggestion {
     pub id: String,
     pub label: String,
@@ -123,6 +136,18 @@ pub fn build_playbook(state: &Value) -> Playbook {
         .pointer("/interaction/freeform_allowed")
         .and_then(Value::as_bool)
         .unwrap_or(true);
+    let recommendation_policy = state
+        .pointer("/interaction/recommendation_policy")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default()
+        .to_string();
+    let action_skills = state
+        .pointer("/interaction/skills")
+        .and_then(Value::as_array)
+        .map(|values| values.iter().filter_map(parse_action_skill).collect())
+        .unwrap_or_default();
     let verbs = state
         .pointer("/interaction/verbs")
         .and_then(Value::as_array)
@@ -206,6 +231,8 @@ pub fn build_playbook(state: &Value) -> Playbook {
     Playbook {
         mode,
         freeform_allowed,
+        recommendation_policy,
+        action_skills,
         plot,
         scene,
         actors,
@@ -229,13 +256,34 @@ pub fn format_playbook(playbook: &Playbook) -> String {
         lines.push(frame);
         lines.push(String::new());
     }
-    if playbook.freeform_allowed {
+    if !playbook.action_skills.is_empty() {
+        lines.push(
+            "Distill each player action to one listed action skill; actions outside these skills are not valid for this scene."
+                .to_string(),
+        );
+    } else if playbook.freeform_allowed {
         lines.push(
             "Type a numbered choice, a bracket command such as [ASK], or a custom action."
                 .to_string(),
         );
     } else {
         lines.push("Type a numbered choice or one of the listed commands.".to_string());
+    }
+    if !playbook.action_skills.is_empty() {
+        lines.push(String::new());
+        lines.push("Action skills:".to_string());
+        for action in &playbook.action_skills {
+            let mut line = format!("- {} ({})", action.label, action.id);
+            if !action.description.is_empty() {
+                line.push_str(": ");
+                line.push_str(&action.description);
+            }
+            if !action.aliases.is_empty() {
+                line.push_str(" aliases: ");
+                line.push_str(&action.aliases.join(", "));
+            }
+            lines.push(line);
+        }
     }
     if !playbook.verbs.is_empty() {
         lines.push(String::new());
@@ -263,6 +311,13 @@ pub fn format_playbook(playbook: &Playbook) -> String {
                 lines.push(format!("   {}", suggestion.description));
             }
         }
+    }
+    if !playbook.recommendation_policy.is_empty() {
+        lines.push(String::new());
+        lines.push(format!(
+            "Recommendation policy: {}",
+            playbook.recommendation_policy
+        ));
     }
     if let Some(style) = &playbook.story_style {
         lines.push(String::new());
@@ -682,6 +737,35 @@ fn parse_verb(value: &Value) -> Option<ActionVerb> {
         command: command.clone(),
         label: string_field(value, "label").unwrap_or(command),
         description: string_field(value, "description").unwrap_or_default(),
+    })
+}
+
+fn parse_action_skill(value: &Value) -> Option<ActionSkill> {
+    if let Some(raw) = value.as_str() {
+        let id = raw.trim();
+        if id.is_empty() {
+            return None;
+        }
+        return Some(ActionSkill {
+            id: id.to_string(),
+            label: id.replace(['_', '-'], " "),
+            description: String::new(),
+            skill: format!("game-action-{id}"),
+            freeform: true,
+            aliases: Vec::new(),
+        });
+    }
+    let id = string_field(value, "id")?;
+    Some(ActionSkill {
+        label: string_field(value, "label").unwrap_or_else(|| id.replace(['_', '-'], " ")),
+        description: string_field(value, "description").unwrap_or_default(),
+        skill: string_field(value, "skill").unwrap_or_else(|| format!("game-action-{id}")),
+        freeform: value
+            .get("freeform")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+        aliases: string_array_field(value, "aliases"),
+        id,
     })
 }
 

@@ -1052,8 +1052,13 @@ mod tests {
     /// `scoped_home` (snapshot repo init shells out to git, which races
     /// against parallel-running tests). Skip it here so this smoke test
     /// stays parallel-safe.
+    ///
+    /// `/logout` is also covered directly in `commands/config.rs`; it clears
+    /// the process-global credential config path, so invoking it from this
+    /// registry smoke test can race with config-file tests that temporarily set
+    /// `DEEPSEEK_CONFIG_PATH`.
     fn skip_in_dispatch_smoke(name: &str) -> bool {
-        name == "restore"
+        name == "restore" || name == "logout"
     }
 
     /// Smoke test: every entry in `COMMANDS` must dispatch to a real handler.

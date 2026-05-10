@@ -36,10 +36,12 @@ sub-agent transcripts, are the reload source of truth. Player mode must give
 game sub-agents scoped context and game-safe tools only; developer mode can
 surface raw summaries and roster details for debugging.
 
-The model-visible game helpers are `game_agent_spawn`, `game_agent_send`,
-`game_agent_wait`, `game_agent_resume`, and `game_agent_list`. Player mode must
-not expose the generic coding-agent `agent_spawn` surface for game
-orchestration.
+The model-visible game helpers are `game_agent_spawn`, `game_agent_wait`,
+`game_agent_result`, `game_agent_send`, `game_agent_resume`,
+`game_agent_assign`, `game_agent_cancel`, and `game_agent_list`. Player mode
+must not expose the generic coding-agent `agent_spawn` surface for game
+orchestration. `game_agent_spawn` requires a declared generated pack such as
+`dialogue_girlfriend` when the active game declares packs.
 
 ## Role taxonomy
 
@@ -167,15 +169,24 @@ manager can't match them to the current boot.
 
 ## Output contract
 
-Every sub-agent produces a final result string with five sections,
+Every sub-agent produces a final result string with five Markdown H3 sections,
 in order:
 
 ```
-SUMMARY:    one paragraph; what you did and what happened
-CHANGES:    files modified, with one-line descriptions; "None." if read-only
-EVIDENCE:   path:line-range citations and key findings; one bullet each
-RISKS:      what could go wrong / what the parent should double-check
-BLOCKERS:   what stopped you; "None." if you finished cleanly
+### SUMMARY
+Outcome: DONE | PARTIAL | BLOCKED | FAILED, then one short paragraph.
+
+### EVIDENCE
+Observed files, commands, tool results, or search hits; one bullet each.
+
+### CHANGES
+Files or side effects written; "None." if read-only.
+
+### RISKS
+Correctness, security, performance, or scope risks; "None observed." if clean.
+
+### BLOCKERS
+What stopped progress; "None." if the task finished cleanly.
 ```
 
 The exact format lives in `crates/tui/src/prompts/subagent_output_format.md`.

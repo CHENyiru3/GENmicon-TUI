@@ -687,6 +687,7 @@ fn env_truthy(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::lock_test_env;
 
     #[test]
     fn default_settings_disable_auto_compact_to_protect_v4_prefix_cache() {
@@ -802,11 +803,10 @@ mod tests {
     }
 
     /// Tests that mutate process-global `NO_ANIMATIONS` serialise
-    /// through this guard so the cargo parallel runner doesn't
-    /// observe interleaved overrides.
+    /// through the shared env guard so the cargo parallel runner doesn't
+    /// observe interleaved overrides from other modules.
     fn no_animations_test_guard() -> std::sync::MutexGuard<'static, ()> {
-        static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        GUARD.lock().unwrap_or_else(|e| e.into_inner())
+        lock_test_env()
     }
 
     #[test]
@@ -889,8 +889,7 @@ mod tests {
     /// Serialise tests that mutate `DEEPSEEK_CONFIG_PATH` through this guard
     /// so the parallel test runner doesn't observe interleaved env values.
     fn config_path_test_guard() -> std::sync::MutexGuard<'static, ()> {
-        static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        GUARD.lock().unwrap_or_else(|e| e.into_inner())
+        lock_test_env()
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 ## Current Goal
 
-Build a Game TUI system inside DeepSeek TUI.
+Continue building the Game TUI system inside DeepSeek TUI.
 
 The project direction is no longer "integrate Gen-micom as a native subsystem".
 Gen-micom-style markdown worlds are useful reference material, but the TUI repo
@@ -20,15 +20,23 @@ Target spec file:
 The initial framework scaffold is now present:
 
 - `crates/game` is a pure Rust runtime crate for manifests, driver resolution,
-  saves, lookup, rendering, Starlark driver functions, and agent packs.
+  saves, lookup, rendering, story playbooks, Starlark driver functions, atomic
+  commits, and agent packs.
 - `deepseek play`, `/play`, `/game ...`, native `game_*` tools, and
   player-mode game tool-profile wiring exist in the TUI.
+- The native tool surface currently includes `game_status`, `game_render`,
+  `game_playbook`, `game_lookup`, `game_fact_check`, `game_run_driver`, and
+  `game_commit_turn`.
 - `examples/games/reconciliation-demo` is the minimal galgame proof fixture.
+  Its default save includes `AGENTS.json`, and the `dialogue` role expands into
+  a Rei-owned `dialogue_girlfriend` NPC pack with a dedicated NPC skill.
 - `examples/games/thirteen-angry-man` is the first serious-game cartridge
   scaffold, using the bundled `deliberation-drama` driver.
 - Save-locked driver versions must resolve exactly; missing or mismatched
   versions produce a load notice rather than silently continuing as a loaded
   session.
+- `[game]` config keys remain reserved/planned; current game launch resolution
+  is explicit CLI/slash argument first, then current workspace `game.toml`.
 
 ## Source Of Truth And Sync Rules
 
@@ -66,6 +74,33 @@ or game computer:
 - resume later from file-backed save state
 
 The first milestone is a playable loop, not authoring tooling.
+
+## Active UI Feature Goal
+
+The next Game TUI UI branch should make player mode an immersive Game Console
+screen inside the existing TUI rather than a transcript-first coding cockpit.
+The authoritative details are in `docs/GAME_TUI_FRAMEWORK_SPEC.md` under
+"Immersive Game Console Goal".
+
+Implementation constraints:
+
+- keep `GameSession` as the mode carrier; do not add `AppMode::Game`
+- add `crates/tui/src/tui/widgets/game_console.rs` and branch
+  `tui/ui.rs::render` into it when `game_player_presentation(app)` is true
+- hide coding sidebars, raw tool/thinking cells, model/cost/context footer
+  noise, raw JSON, file paths, and coding status labels in player mode
+- keep `/game dev on` as the diagnostics/raw-state/tool-activity escape hatch
+- extend `crates/game::render` additively with player-view data,
+  `AsciiArtFrame`, `AsciiArtVariant`, and `GameViewSnapshot`
+- store accepted model-authored ASCII art under `STATE.json.ui.ascii`, committed
+  only through `game_commit_turn`
+- add a game-scoped `render_artist` role that can use only game-safe read tools
+  and returns JSON ASCII proposals; it cannot call `game_commit_turn`
+- fall back to deterministic text panels when art is missing, stale, invalid,
+  or oversized
+- add optional designer/agent-controlled scene music: cues are local cartridge
+  data, selected through committed game state, and may use a locally installed
+  `kew` process adapter; player mode must not expose a music control panel
 
 ## Design Center
 
@@ -242,7 +277,7 @@ constrained Starlark scripts executed by the Rust runtime.
 `AGENTS.json`, NPC skill overlays, and render caches are post-commit derived
 artifacts and must be rebuildable.
 
-## Planned Public Surface
+## Active And Reserved Public Surface
 
 CLI:
 
@@ -256,12 +291,14 @@ Slash commands:
 /play [game-or-path]
 /game status
 /game render
+/game rules
+/game choices
 /game saves
 /game dev
 /game exit
 ```
 
-Config:
+Reserved config shape:
 
 ```toml
 [game]
@@ -278,15 +315,24 @@ Native game tools:
 
 - `game_status`
 - `game_render`
+- `game_playbook`
 - `game_lookup`
+- `game_fact_check`
 - `game_run_driver`
 - `game_commit_turn`
 
 `game_lookup` returns bounded content excerpts from declared content roots only
-(default 16 KiB, hard cap 32 KiB). `game_run_driver` calls only driver-declared
-Starlark functions and cannot mutate saves or access files, shell, or network.
-`game_commit_turn` requires `expected_revision`, `player_input`, `resolution`,
-and an RFC 7396 JSON Merge Patch as `state_patch`; the runtime generates
+(default 16 KiB, hard cap 32 KiB), and can read bounded active-save JSON state
+paths through `state_path` / `key`. `game_playbook` exposes current choices,
+story nodes, and the active story style. `game_fact_check` gates free-form
+actions or proposed narration against active continuity facts before narration
+or commit. `game_run_driver` calls only driver-declared Starlark functions and
+cannot mutate saves or access files, shell, or network.
+
+`game_commit_turn` appends only when it has `player_input` and `resolution`.
+`expected_revision` is inferred from the active save when omitted, and
+`state_patch` may be omitted for an empty patch. The runtime runs the same fact
+gate before writing, applies an RFC 7396 JSON Merge Patch, and generates
 `turn_id`, `revision_after`, and `created_at`.
 
 Game-scoped sub-agent helpers are `game_agent_spawn`, `game_agent_send`,
@@ -301,30 +347,35 @@ Player mode should expose only game-safe tools plus required skill-loading
 support. Developer mode can expose validation, raw paths, raw state, and normal
 inspection tools.
 
-`[game]` config is planned for user/global and project config. Project config
-can provide roots and defaults, but cannot persistently enable developer mode;
-only user config can honor `game.developer_mode = true`.
+`[game]` config is planned for user/global and project config, but it is not
+active yet. Current launch resolution is explicit CLI/slash argument first, then
+the current workspace if it contains `game.toml`. Driver lookup checks the game
+package's local `drivers/` directory and `~/.deepseek/game-drivers`.
 
-## Implementation Guidance
+Future project config may provide roots and defaults, but must not persistently
+enable developer mode; only user config may honor
+`game.developer_mode = true`.
 
-Keep the first implementation slice narrow:
+## Next Branch Guidance
 
-1. Add the markdown spec first.
-2. Add required pure Rust crate `crates/game`, with no ratatui, TUI, LLM,
-   shell, network, Python, or external runtime dependency.
-3. Add driver manifest loading and version resolution before genre-specific
-   gameplay logic.
-4. Add a constrained Starlark execution boundary for deterministic driver
-   scripts.
-5. Wire the existing TUI to start in a Game Console presentation when launched
-   with `deepseek play`.
-6. Add `GameSession` state to the app, but do not add a new `AppMode::Game`.
-7. Add a restricted tool profile for player mode.
-8. Add game-scoped `game_agent_*` orchestration for the dynamic State, Plot, and
-   NPC manager topology.
-9. Persist turns only through `game_commit_turn` using JSON Merge Patch.
-10. Add the V1 galgame reconciliation demo fixture.
-11. Rebuild sub-agents from save summaries and NPC skills on reload.
+The initial scaffold exists. Keep the next feature branch narrow and close the
+remaining V1 gaps instead of redoing landed work:
+
+1. Verify the active scaffold with focused tests before widening behavior.
+2. Keep `GameSession` as presentation/tool-profile state; do not add
+   `AppMode::Game`.
+3. Keep player mode restricted to native game tools, skill loading, and scoped
+   `game_agent_*` helpers.
+4. Implement `[game]` config only with loader, `/config` UI, docs, and tests in
+   the same patch.
+5. Expand game picker or driver-install UX only after exact save-locked driver
+   reload remains covered.
+6. Persist turns only through `game_commit_turn` using JSON Merge Patch and the
+   continuity fact gate.
+7. Rebuild sub-agents from save summaries and NPC skills on reload; do not rely
+   on old child transcripts.
+8. Keep the reconciliation demo and Thirteen Angry Man scaffold loadable after
+   every feature slice.
 
 Start code discovery from the current repo seams:
 
@@ -354,13 +405,14 @@ Start code discovery from the current repo seams:
 - Sub-agents can propose state/plot/dialogue, but only native game tools commit.
 - Save files remain the source of truth.
 - `game_run_driver` handles deterministic declared Starlark calculations.
-- `game_commit_turn` uses RFC 7396 JSON Merge Patch and exact revision checks.
+- `game_commit_turn` uses RFC 7396 JSON Merge Patch, infers the active revision
+  when omitted, and rejects stale revisions without writing.
 - One local galgame reconciliation demo can reach success and failure endings.
 - No Python subprocess is required for normal play.
 
 ## Verification Targets
 
-Future implementation should include:
+Before claiming V1 complete, verification should include:
 
 - crate tests for manifest load, save load, validation, render data, lookup,
   exact driver-version reload, Starlark script sandboxing, `game_run_driver`,

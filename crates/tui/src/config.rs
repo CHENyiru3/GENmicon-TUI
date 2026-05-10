@@ -3914,7 +3914,10 @@ api_key = "old-openrouter-key"
 
         let contents = fs::read_to_string(&config_path)?;
         assert!(contents.contains("api_key_backup = \"old\""));
-        assert!(contents.contains("api_key = \""));
+        assert!(
+            contents.contains("api_key = \""),
+            "saved config should retain a root api_key line, got: {contents:?}"
+        );
         Ok(())
     }
 
