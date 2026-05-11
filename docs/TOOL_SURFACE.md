@@ -37,7 +37,14 @@ helpers named `game_agent_spawn`, `game_agent_wait`, `game_agent_result`,
 `game_agent_send`, `game_agent_resume`, `game_agent_assign`,
 `game_agent_cancel`, and `game_agent_list`. Those helpers must remain
 game-scoped and use declared driver roles and generated agent packs when the
-active game declares them. V1 should not add a model-visible `game_parallel` wrapper; safe
+active game declares them. Player mode prewarms declared packs on Game Console
+entry and prefers `game_agent_send` to reuse those running processors before
+spawning replacements. `game_agent_wait` is a short, bounded player-facing wait;
+on timeout the waited game processors keep running in parallel and the main
+game session continues unless a later completion event arrives. `game_agent_result`
+should normally be used as a non-blocking status/result read; blocking game
+result reads use the same short timeout and preserve still-running processors.
+V1 should not add a model-visible `game_parallel` wrapper; safe
 parallelism is an engine behavior, not an advertised meta-tool.
 
 Shell, generic file write/edit tools, repository git tools, broad workspace inspection,

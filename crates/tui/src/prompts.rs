@@ -26,28 +26,13 @@ pub struct PromptSessionContext<'a> {
     pub locale_tag: &'a str,
 }
 
+const GAME_CONSOLE_PROMPT: &str = include_str!("prompts/game_console.md");
+
 fn render_game_session_block(game_session: &crate::game::GameSession) -> String {
     let mut block = String::from("## Game Console\n\n");
     block.push_str(&game_session.transcript_intro());
-    block.push_str(
-        "\n\nGame rules for this turn:\n\
-         - Resolve player actions as gameplay, not as repository work.\n\
-         - Game language is selected before the TUI session starts and is shown in the game session. Do not ask for language inside the story. Only English and Chinese are supported; keep scene, dialogue, choices, and panel text aligned to that selected language.\n\
-         - The opening must always restate the background story in the selected language before the first live dialogue beat.\n\
-         - Keep the player-facing Dialogue surface to live chat, immediate narration, and the latest in-character response. Use organized plain text there: no Markdown headings, horizontal rules, bold markers, or raw Markdown lists unless the active renderer explicitly supports Markdown. Keep status, tasks, items, choices, and scene/background in their own visible panels rather than duplicating them into Dialogue.\n\
-         - In normal Game Console player mode, keep tool use and reasoning out of the player-facing narration. Show only scene, dialogue, choices, and consequences; developer mode can expose diagnostics.\n\
-         - If `game_playbook` exposes action skills, distill every player input to exactly one declared action skill before resolving it. Do not invent gameplay actions outside that skill set; free-form wording is allowed only inside the selected skill.\n\
-         - Update suggested/recommended choices only when the story is drifting in a wrong direction or the player needs a gentle reorientation. Recommendations must be slight diegetic nudges, never hidden gates, exact scores, best routes, or decisive route-solving hints.\n\
-         - Treat reflection/hint action skills as slight in-world nudges only. Never reveal hidden gates, exact scores, best routes, or decisive route-solving hints.\n\
-         - Use `game_status`, `game_render`, `game_playbook`, `game_lookup`, and `game_run_driver` for game facts, current choices, story nodes, and deterministic driver logic. For save state keys such as `world.flags`, call `game_lookup` with `state_path`; for fixed content, call it with `handle` or `query`. For driver scoring, call `game_run_driver` with `function` plus `args`, including `player_action` when the player typed freeform text.\n\
-         - When scoped game sub-agent packs are listed, active NPC dialogue, reactions, memories, and other stateful character behavior should come from the matching pack. Call `game_agent_list`, spawn with `game_agent_spawn` using `pack` or `role` set to that pack if no suitable live processor exists, wait with `game_agent_wait` or `game_agent_result`, and treat the child output as a proposal only.\n\
-         - Before narrating or committing a free-form action that introduces new biology, identity, family, legal, location, or backstory facts, call `game_fact_check`. If it returns `hard_block`, do not narrate that false fact and do not commit it; ask for a revised action or resolve the claim as impossible/false inside the scene.\n\
-         - Use the active story style from `game_playbook` to adapt narration, pacing, tension axes, and branch movement to the cartridge's plot type.\n\
-         - Treat story progress as a git-like graph in save state: each committed turn advances the active node/ref only when a visible gate is satisfied. Do not use the user's repository git history as the game save.\n\
-         - Load game or driver skills with `load_skill` only when the current action needs that rule pack.\n\
-         - Persist authoritative state only with `game_commit_turn` using the current save revision.\n\
-         - Do not use ordinary coding, shell, git, network, or file-editing tools for player-mode gameplay.",
-    );
+    block.push_str("\n\n");
+    block.push_str(GAME_CONSOLE_PROMPT);
     block
 }
 
@@ -589,6 +574,55 @@ mod tests {
         assert!(prompt.contains("## Environment"));
         assert!(prompt.contains("- lang: ja"));
         assert!(prompt.contains("- deepseek_version:"));
+    }
+
+    #[test]
+    fn game_prompt_injects_single_turn_controller() {
+        let tmp = tempdir().expect("tempdir");
+        let game_session = load_reconciliation_demo_game_session();
+        let prompt = match system_prompt_for_mode_with_context_skills_and_session(
+            AppMode::Agent,
+            tmp.path(),
+            None,
+            None,
+            None,
+            PromptSessionContext {
+                user_memory_block: None,
+                goal_objective: None,
+                game_session: Some(&game_session),
+                locale_tag: "en",
+            },
+        ) {
+            SystemPrompt::Text(text) => text,
+            SystemPrompt::Blocks(_) => panic!("expected text system prompt"),
+        };
+
+        assert_eq!(count_occurrences(&prompt, "# Game Console Prompt"), 1);
+        assert_eq!(count_occurrences(&prompt, "## Turn Controller"), 1);
+        assert_eq!(count_occurrences(&prompt, "## Guardrails"), 1);
+        assert!(prompt.contains("observe:"));
+        assert!(prompt.contains("classify:"));
+        assert!(prompt.contains("estimate:"));
+        assert!(prompt.contains("constrain:"));
+        assert!(prompt.contains("commit:"));
+        assert!(prompt.contains("render:"));
+        assert!(prompt.contains("Priority order:"));
+        assert!(prompt.contains(
+            "controller > save invariants > action skill > driver skill > NPC proposal > storytelling style"
+        ));
+    }
+
+    #[test]
+    fn game_turn_controller_pins_commit_and_player_mode_invariants() {
+        let block = render_game_session_block(&load_reconciliation_demo_game_session());
+
+        assert_eq!(count_occurrences(&block, "# Game Console Prompt"), 1);
+        assert_eq!(count_occurrences(&block, "## Turn Controller"), 1);
+        assert!(block.contains("`story.active_node` must stay aligned"));
+        assert!(block.contains("`expected_revision` must match"));
+        assert!(block.contains("Sub-agents propose only"));
+        assert!(block.contains("never reveal tool calls, waits, routing"));
+        assert!(block.contains("Load game or driver skills only when"));
     }
 
     #[test]
@@ -1152,5 +1186,25 @@ mod tests {
             prompt.contains(&extra.display().to_string()),
             "instructions block must annotate its source path"
         );
+    }
+
+    fn load_reconciliation_demo_game_session() -> crate::game::GameSession {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("examples/games/reconciliation-demo");
+        crate::game::load_game_session(
+            std::path::Path::new("."),
+            crate::game::GameLaunchOptions {
+                game_or_path: Some(root),
+                save: Some("default".to_string()),
+                developer_mode: false,
+                language: crate::game::GameLanguage::English,
+            },
+        )
+        .expect("demo game should load")
+    }
+
+    fn count_occurrences(haystack: &str, needle: &str) -> usize {
+        haystack.match_indices(needle).count()
     }
 }

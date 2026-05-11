@@ -48,7 +48,8 @@ use crate::tools::spec::RuntimeToolServices;
 use crate::tools::spec::{ApprovalRequirement, ToolError, ToolResult};
 use crate::tools::subagent::{
     Mailbox, SharedSubAgentManager, SubAgentCompletion, SubAgentForkContext, SubAgentRuntime,
-    SubAgentType, new_shared_subagent_manager, resolve_subagent_assignment_route,
+    SubAgentType, new_shared_subagent_manager, prewarm_game_subagents,
+    resolve_subagent_assignment_route,
 };
 use crate::tools::todo::{SharedTodoList, new_shared_todo_list};
 use crate::tools::user_input::{UserInputRequest, UserInputResponse};
@@ -573,6 +574,8 @@ impl Engine {
     /// Run the engine event loop
     #[allow(clippy::too_many_lines)]
     pub async fn run(mut self) {
+        self.prewarm_game_subagents().await;
+
         while let Some(op) = self.rx_op.recv().await {
             match op {
                 Op::SendMessage {
@@ -972,6 +975,7 @@ impl Engine {
             approval_mode
         };
         self.config.game_session = game_session;
+        self.prewarm_game_subagents().await;
 
         // Update system prompt to match current mode and include persisted compaction context.
         self.refresh_system_prompt(mode);
@@ -1060,8 +1064,8 @@ impl Engine {
                             self.session.reasoning_effort.clone(),
                             self.session.reasoning_effort_auto,
                         )
-                        .with_max_spawn_depth(self.config.max_spawn_depth)
-                        .with_parent_completion_tx(self.tx_subagent_completion.clone());
+                        .with_max_spawn_depth(self.config.max_spawn_depth);
+                        rt = rt.with_parent_completion_tx(self.tx_subagent_completion.clone());
                         if let Some(context) = fork_context_for_runtime.clone() {
                             rt = rt.with_fork_context(context);
                         }
@@ -1525,6 +1529,56 @@ impl Engine {
             );
         }
         ctx
+    }
+
+    async fn prewarm_game_subagents(&self) {
+        if !self.config.features.enabled(Feature::Subagents) {
+            return;
+        }
+        let Some(crate::game::GameSession::Loaded(session)) = self.config.game_session.as_ref()
+        else {
+            return;
+        };
+        if session.developer_mode {
+            return;
+        }
+        let Some(client) = self.deepseek_client.clone() else {
+            return;
+        };
+
+        let runtime = SubAgentRuntime::new(
+            client,
+            "deepseek-v4-flash".to_string(),
+            self.build_tool_context(AppMode::Agent, true),
+            false,
+            Some(self.tx_event.clone()),
+            Arc::clone(&self.subagent_manager),
+        )
+        .with_role_models(self.config.subagent_model_overrides.clone())
+        .with_auto_model(false)
+        .with_reasoning_effort(Some("off".to_string()), false)
+        .with_max_spawn_depth(self.config.max_spawn_depth)
+        .with_parent_completion_tx(self.tx_subagent_completion.clone());
+
+        match prewarm_game_subagents(Arc::clone(&self.subagent_manager), runtime, session).await {
+            Ok(spawned) if !spawned.is_empty() => {
+                tracing::debug!(
+                    target: "game",
+                    count = spawned.len(),
+                    "prewarmed game sub-agents"
+                );
+            }
+            Ok(_) => {}
+            Err(err) => {
+                tracing::warn!(target: "game", ?err, "failed to prewarm game sub-agents");
+                let _ = self
+                    .tx_event
+                    .send(Event::status(format!(
+                        "Game sub-agent prewarm skipped: {err}"
+                    )))
+                    .await;
+            }
+        }
     }
 
     async fn ensure_mcp_pool(&mut self) -> Result<Arc<AsyncMutex<McpPool>>, ToolError> {

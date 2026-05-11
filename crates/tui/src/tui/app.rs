@@ -616,6 +616,8 @@ pub struct GameConsoleState {
     pub focus: GameConsoleFocus,
     pub progress_scroll: usize,
     pub dialogue_scroll: usize,
+    pub progress_max_scroll: usize,
+    pub dialogue_max_scroll: usize,
 }
 
 impl GameConsoleState {
@@ -623,6 +625,15 @@ impl GameConsoleState {
         self.focus = GameConsoleFocus::Dialogue;
         self.progress_scroll = 0;
         self.dialogue_scroll = 0;
+        self.progress_max_scroll = 0;
+        self.dialogue_max_scroll = 0;
+    }
+
+    pub fn update_scroll_bounds(&mut self, dialogue_max_scroll: usize, progress_max_scroll: usize) {
+        self.dialogue_max_scroll = dialogue_max_scroll;
+        self.progress_max_scroll = progress_max_scroll;
+        self.dialogue_scroll = normalize_game_scroll(self.dialogue_scroll, dialogue_max_scroll);
+        self.progress_scroll = normalize_game_scroll(self.progress_scroll, progress_max_scroll);
     }
 
     pub fn toggle_focus(&mut self) {
@@ -633,13 +644,39 @@ impl GameConsoleState {
     }
 
     pub fn scroll_up(&mut self, amount: usize) {
-        let scroll = self.focused_scroll_mut();
-        *scroll = scroll.saturating_sub(amount);
+        match self.focus {
+            GameConsoleFocus::Dialogue => {
+                self.dialogue_scroll = self
+                    .dialogue_scroll
+                    .min(self.dialogue_max_scroll)
+                    .saturating_sub(amount);
+            }
+            GameConsoleFocus::Progress => {
+                self.progress_scroll = self
+                    .progress_scroll
+                    .min(self.progress_max_scroll)
+                    .saturating_sub(amount);
+            }
+        }
     }
 
     pub fn scroll_down(&mut self, amount: usize) {
-        let scroll = self.focused_scroll_mut();
-        *scroll = scroll.saturating_add(amount);
+        match self.focus {
+            GameConsoleFocus::Dialogue => {
+                self.dialogue_scroll = self
+                    .dialogue_scroll
+                    .min(self.dialogue_max_scroll)
+                    .saturating_add(amount)
+                    .min(self.dialogue_max_scroll);
+            }
+            GameConsoleFocus::Progress => {
+                self.progress_scroll = self
+                    .progress_scroll
+                    .min(self.progress_max_scroll)
+                    .saturating_add(amount)
+                    .min(self.progress_max_scroll);
+            }
+        }
     }
 
     pub fn scroll_to_top(&mut self) {
@@ -647,7 +684,10 @@ impl GameConsoleState {
     }
 
     pub fn scroll_to_bottom(&mut self) {
-        *self.focused_scroll_mut() = usize::MAX;
+        match self.focus {
+            GameConsoleFocus::Dialogue => self.dialogue_scroll = self.dialogue_max_scroll,
+            GameConsoleFocus::Progress => self.progress_scroll = self.progress_max_scroll,
+        }
     }
 
     fn focused_scroll_mut(&mut self) -> &mut usize {
@@ -655,6 +695,14 @@ impl GameConsoleState {
             GameConsoleFocus::Dialogue => &mut self.dialogue_scroll,
             GameConsoleFocus::Progress => &mut self.progress_scroll,
         }
+    }
+}
+
+fn normalize_game_scroll(scroll: usize, max_scroll: usize) -> usize {
+    if scroll == usize::MAX {
+        max_scroll
+    } else {
+        scroll.min(max_scroll)
     }
 }
 
@@ -3777,6 +3825,17 @@ impl App {
         if !self.is_loading {
             return SubmitDisposition::Immediate;
         }
+        if self
+            .game_session
+            .as_ref()
+            .is_some_and(|session| !session.developer_mode())
+            && self.dispatch_started_at.is_none()
+            && self.turn_started_at.is_none()
+            && self.streaming_message_index.is_none()
+            && self.runtime_turn_status.as_deref() != Some("in_progress")
+        {
+            return SubmitDisposition::Immediate;
+        }
         // Busy: always queue. Ctrl+Enter routes through steer_user_message directly.
         SubmitDisposition::Queue
     }
@@ -4409,6 +4468,20 @@ mod tests {
     }
 
     #[test]
+    fn game_console_scroll_up_moves_off_bottom_sentinel() {
+        let mut state = GameConsoleState::default();
+        state.dialogue_scroll = usize::MAX;
+        state.update_scroll_bounds(40, 0);
+        assert_eq!(state.dialogue_scroll, 40);
+
+        state.scroll_up(3);
+        assert_eq!(state.dialogue_scroll, 37);
+
+        state.scroll_down(10);
+        assert_eq!(state.dialogue_scroll, 40);
+    }
+
+    #[test]
     fn test_add_message() {
         let mut app = App::new(test_options(false), &Config::default());
         let initial_len = app.history.len();
@@ -4973,6 +5046,76 @@ mod tests {
         app.is_loading = true;
         app.offline_mode = false;
         app.streaming_message_index = Some(0);
+        assert_eq!(app.decide_submit_disposition(), SubmitDisposition::Queue);
+    }
+
+    #[test]
+    fn game_submit_disposition_immediate_when_loading_flag_is_stale() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.game_session = Some(crate::game::GameSession::Notice(
+            crate::game::GameSessionNotice {
+                message: "loaded".to_string(),
+                developer_mode: false,
+                language: crate::game::GameLanguage::English,
+            },
+        ));
+        app.is_loading = true;
+        app.offline_mode = false;
+        app.dispatch_started_at = None;
+        app.turn_started_at = None;
+        app.runtime_turn_status = None;
+
+        assert_eq!(
+            app.decide_submit_disposition(),
+            SubmitDisposition::Immediate
+        );
+    }
+
+    #[test]
+    fn game_submit_disposition_queues_when_dispatch_is_starting() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.game_session = Some(crate::game::GameSession::Notice(
+            crate::game::GameSessionNotice {
+                message: "loaded".to_string(),
+                developer_mode: false,
+                language: crate::game::GameLanguage::English,
+            },
+        ));
+        app.is_loading = true;
+        app.dispatch_started_at = Some(Instant::now());
+
+        assert_eq!(app.decide_submit_disposition(), SubmitDisposition::Queue);
+    }
+
+    #[test]
+    fn game_submit_disposition_queues_when_turn_is_in_progress() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.game_session = Some(crate::game::GameSession::Notice(
+            crate::game::GameSessionNotice {
+                message: "loaded".to_string(),
+                developer_mode: false,
+                language: crate::game::GameLanguage::English,
+            },
+        ));
+        app.is_loading = true;
+        app.runtime_turn_status = Some("in_progress".to_string());
+
+        assert_eq!(app.decide_submit_disposition(), SubmitDisposition::Queue);
+    }
+
+    #[test]
+    fn game_submit_disposition_queues_when_streaming_cell_is_active() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.game_session = Some(crate::game::GameSession::Notice(
+            crate::game::GameSessionNotice {
+                message: "loaded".to_string(),
+                developer_mode: false,
+                language: crate::game::GameLanguage::English,
+            },
+        ));
+        app.is_loading = true;
+        app.streaming_message_index = Some(0);
+
         assert_eq!(app.decide_submit_disposition(), SubmitDisposition::Queue);
     }
 

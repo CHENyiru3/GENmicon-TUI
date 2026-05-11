@@ -105,7 +105,7 @@ use super::views::{
 use super::widgets::pending_input_preview::{ContextPreviewItem, PendingInputPreview};
 use super::widgets::{
     ChatWidget, ComposerWidget, FooterProps, FooterToast, FooterWidget, GameConsoleWidget,
-    HeaderData, HeaderWidget, Renderable,
+    HeaderData, HeaderWidget, Renderable, game_console_scroll_bounds,
 };
 
 // === Constants ===
@@ -856,6 +856,14 @@ async fn run_event_loop(
                                 | "agent_wait"
                                 | "agent_result"
                                 | "agent_status"
+                                | "game_agent_spawn"
+                                | "game_agent_cancel"
+                                | "game_agent_wait"
+                                | "game_agent_result"
+                                | "game_agent_list"
+                                | "game_agent_send"
+                                | "game_agent_resume"
+                                | "game_agent_assign"
                         ) {
                             let _ = engine_handle.send(Op::ListSubAgents).await;
                         }
@@ -1188,12 +1196,23 @@ async fn run_event_loop(
                             .or(app.turn_started_at)
                             .map(|started| started.elapsed())
                             .unwrap_or_default();
+                        let awaiting_ids: std::collections::HashSet<&str> = app
+                            .subagent_cache
+                            .iter()
+                            .filter(|agent| {
+                                matches!(agent.status, SubAgentStatus::Running)
+                                    && agent.awaiting_input
+                            })
+                            .map(|agent| agent.agent_id.as_str())
+                            .collect();
                         let has_other_running_subagents =
-                            app.agent_progress.keys().any(|agent_id| agent_id != &id)
-                                || app.subagent_cache.iter().any(|agent| {
-                                    agent.agent_id != id
-                                        && matches!(agent.status, SubAgentStatus::Running)
-                                });
+                            app.agent_progress.keys().any(|agent_id| {
+                                agent_id != &id && !awaiting_ids.contains(agent_id.as_str())
+                            }) || app.subagent_cache.iter().any(|agent| {
+                                agent.agent_id != id
+                                    && matches!(agent.status, SubAgentStatus::Running)
+                                    && !agent.awaiting_input
+                            });
                         app.agent_progress.remove(&id);
                         app.status_message = Some(format!(
                             "Sub-agent {id} completed: {}",
@@ -1419,7 +1438,8 @@ async fn run_event_loop(
             app.needs_redraw = true;
         }
 
-        if let Some(next) = queued_to_send {
+        let dispatched_queued_to_send = queued_to_send.is_some();
+        if let Some(next) = queued_to_send.take() {
             if let Err(err) = dispatch_user_message(app, config, &engine_handle, next.clone()).await
             {
                 app.queue_message(next);
@@ -1461,6 +1481,20 @@ async fn run_event_loop(
 
         let has_running_agents = running_agent_count(app) > 0;
         if reconcile_turn_liveness(app, Instant::now(), has_running_agents) {
+            app.needs_redraw = true;
+        }
+        if !dispatched_queued_to_send
+            && game_player_can_dispatch_queued_action(app)
+            && let Some(next) = app.pop_queued_message()
+        {
+            if let Err(err) = dispatch_user_message(app, config, &engine_handle, next.clone()).await
+            {
+                app.queue_message(next);
+                app.status_message = Some(format!(
+                    "Dispatch failed ({err}); kept {} queued message(s)",
+                    app.queued_message_count()
+                ));
+            }
             app.needs_redraw = true;
         }
         if (app.is_loading || has_running_agents || app.is_compacting)
@@ -3061,6 +3095,23 @@ fn queued_session_to_ui(msg: QueuedSessionMessage) -> QueuedMessage {
 
 fn reconcile_turn_liveness(app: &mut App, now: Instant, has_running_agents: bool) -> bool {
     if app.is_loading
+        && game_player_presentation(app)
+        && app.runtime_turn_status.is_none()
+        && app.dispatch_started_at.is_none()
+        && app.turn_started_at.is_none()
+        && app.streaming_message_index.is_none()
+        && !app.is_compacting
+    {
+        app.is_loading = false;
+        app.push_status_toast(
+            "Recovered Game Console input state.",
+            StatusToastLevel::Warning,
+            Some(4_000),
+        );
+        return true;
+    }
+
+    if app.is_loading
         && app.runtime_turn_status.is_none()
         && !has_running_agents
         && !app.is_compacting
@@ -3097,6 +3148,16 @@ fn reconcile_turn_liveness(app: &mut App, now: Instant, has_running_agents: bool
     }
 
     false
+}
+
+fn game_player_can_dispatch_queued_action(app: &App) -> bool {
+    game_player_presentation(app)
+        && !app.offline_mode
+        && !app.is_loading
+        && app.dispatch_started_at.is_none()
+        && app.turn_started_at.is_none()
+        && app.streaming_message_index.is_none()
+        && app.runtime_turn_status.as_deref() != Some("in_progress")
 }
 
 /// Translate an `EngineEvent::Error` into UI state updates.
@@ -5608,6 +5669,9 @@ fn render_game_player_console(f: &mut Frame, app: &mut App, size: Rect) {
         .split(size);
 
     {
+        let bounds = game_console_scroll_bounds(app, chunks[0]);
+        app.game_console
+            .update_scroll_bounds(bounds.dialogue_max_scroll, bounds.progress_max_scroll);
         let widget = GameConsoleWidget::new(app);
         let buf = f.buffer_mut();
         widget.render(chunks[0], buf);

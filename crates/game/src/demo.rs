@@ -254,6 +254,7 @@ pub fn reconciliation_initial_state(driver_id: &str, driver_version: &str) -> Va
                     "title": "The last stair",
                     "status": "active",
                     "summary": "She is close enough to hear one honest action before leaving.",
+                    "scene_art": "opening",
                     "gate": "Choose a sincere action that does not block her.",
                     "next": ["honest_admission", "trust_repair", "pressure_failure"]
                 },
@@ -261,6 +262,7 @@ pub fn reconciliation_initial_state(driver_id: &str, driver_version: &str) -> Va
                     "title": "Honest admission",
                     "status": "available",
                     "summary": "The player admits fear or avoidance without deflecting blame.",
+                    "scene_art": "confrontation",
                     "gate": "A direct apology and score_action delta above zero.",
                     "parents": ["opening_apology"],
                     "next": ["trust_repair"]
@@ -269,6 +271,7 @@ pub fn reconciliation_initial_state(driver_id: &str, driver_version: &str) -> Va
                     "title": "Trust repair",
                     "status": "locked",
                     "summary": "She pauses long enough to answer instead of leaving immediately.",
+                    "scene_art": "confrontation",
                     "gate": "Relationship score 3 or higher with no pressure flag.",
                     "parents": ["opening_apology", "honest_admission"],
                     "next": ["success"]
@@ -277,14 +280,34 @@ pub fn reconciliation_initial_state(driver_id: &str, driver_version: &str) -> Va
                     "title": "Pressure failure",
                     "status": "available",
                     "summary": "Pressuring her may keep her physically present while ending the conversation.",
+                    "scene_art": "argument",
                     "gate": "Blocking, demanding, or centering the player's pain.",
                     "parents": ["opening_apology"],
+                    "next": ["emotional_distance"]
+                },
+                "emotional_distance": {
+                    "title": "Emotional distance",
+                    "status": "locked",
+                    "summary": "The conflict cools into silence, and both of them turn away from connection.",
+                    "scene_art": "emotional_distance",
+                    "gate": "A pressure failure resolves without repair.",
+                    "parents": ["pressure_failure"],
+                    "next": ["separation"]
+                },
+                "separation": {
+                    "title": "Final separation",
+                    "status": "locked",
+                    "summary": "She descends toward the platform alone while the player remains behind.",
+                    "scene_art": "separation",
+                    "gate": "The failure branch ends without accountability or restraint.",
+                    "parents": ["emotional_distance"],
                     "next": []
                 },
                 "success": {
                     "title": "She stays to talk",
                     "status": "locked",
                     "summary": "Trust is repaired enough for the conversation to continue off the stairs.",
+                    "scene_art": "embrace",
                     "gate": "Relationship score 3 or higher with honest admission and no pressure flag.",
                     "parents": ["trust_repair"],
                     "next": []
@@ -306,11 +329,59 @@ pub fn reconciliation_initial_state(driver_id: &str, driver_version: &str) -> Va
                     "body": "Be honest before she leaves."
                 }
             ],
+            "scene_art": station_scene_art("opening"),
             "reactions": rei_reactions()
         },
         "agents": {
             "topology": "dynamic-main-plus-managers",
             "last_skill_refresh_turn": 0
+        }
+    })
+}
+
+fn station_scene_art(active: &str) -> Value {
+    json!({
+        "default": "opening",
+        "active": active,
+        "selection_policy": "Use the scene frame that matches story.active_node. Update /ui/scene_art/active through game_commit_turn when a turn changes the visible beat.",
+        "base_path": "assets/scenes/station-overpass",
+        "cols": 120,
+        "rows": 50,
+        "ratio": {
+            "cols": 12,
+            "rows": 5
+        },
+        "frames": {
+            "opening": {
+                "file": "Opening.ansi",
+                "label": "The last chance to speak",
+                "nodes": ["opening_apology"]
+            },
+            "confrontation": {
+                "file": "Confrontation.ansi",
+                "label": "Honest confrontation",
+                "nodes": ["honest_admission", "trust_repair"]
+            },
+            "embrace": {
+                "file": "Embrace.ansi",
+                "label": "Reconciliation and embrace",
+                "nodes": ["success"]
+            },
+            "argument": {
+                "file": "Argument.ansi",
+                "label": "The argument begins",
+                "nodes": ["pressure_failure"]
+            },
+            "emotional_distance": {
+                "file": "Emotional_distance.ansi",
+                "label": "Emotional distance",
+                "nodes": ["emotional_distance"]
+            },
+            "separation": {
+                "file": "Separation.ansi",
+                "label": "Final separation",
+                "nodes": ["separation"]
+            }
         }
     })
 }

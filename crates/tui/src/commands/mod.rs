@@ -181,7 +181,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "play",
         aliases: &[],
-        usage: "/play [game-or-path] [--save <id>] [--dev]",
+        usage: "/play [game-or-path] [--save <id>] [--lang en|zh] [--dev]",
         description_id: MessageId::CmdPlayDescription,
     },
     CommandInfo {

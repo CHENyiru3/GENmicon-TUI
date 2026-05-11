@@ -1490,6 +1490,7 @@ fn live_subagent_result(
         steps_taken: 0,
         duration_ms: 0,
         from_prior_session: false,
+        awaiting_input: false,
     }
 }
 
@@ -1913,6 +1914,7 @@ mod tests {
             steps_taken: 1,
             duration_ms: 10,
             from_prior_session: false,
+            awaiting_input: false,
         }
     }
 

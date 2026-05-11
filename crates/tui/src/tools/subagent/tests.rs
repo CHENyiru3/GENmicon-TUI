@@ -17,6 +17,7 @@ fn make_snapshot(status: SubAgentStatus) -> SubAgentResult {
         steps_taken: 0,
         duration_ms: 0,
         from_prior_session: false,
+        awaiting_input: false,
     }
 }
 
@@ -404,6 +405,37 @@ fn game_pack_prompt_contains_scoped_context() {
 }
 
 #[test]
+fn game_prewarm_prompt_waits_for_send_assignment() {
+    let pack = deepseek_game::agents::AgentPack {
+        role: "dialogue_girlfriend".to_string(),
+        output_contract: "propose Rei dialogue only".to_string(),
+        allowed_files: vec![std::path::PathBuf::from("content/scene.md")],
+        current_scene: json!({"title": "platform"}),
+        relevant_save_slice: json!({"npc": {"id": "girlfriend", "name": "Rei"}}),
+        callable_driver_functions: Vec::new(),
+        assigned_skills: vec![std::path::PathBuf::from("skills/npc/girlfriend/SKILL.md")],
+    };
+
+    let prompt = game_scoped_prompt(Some(&pack), &game_prewarm_task(&pack.role));
+    assert!(
+        prompt.contains("Prewarm the `dialogue_girlfriend`"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("No player action has been sent yet"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("wait for the next game_agent_send"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("mandatory sub-agent output format"),
+        "{prompt}"
+    );
+}
+
+#[test]
 fn test_parse_assign_request_accepts_aliases() {
     let input = json!({
         "id": "agent_1234",
@@ -507,10 +539,15 @@ fn test_wait_mode_condition_any_and_all() {
         make_snapshot(SubAgentStatus::Completed),
         make_snapshot(SubAgentStatus::Cancelled),
     ];
+    let mut resident_proposal = make_snapshot(SubAgentStatus::Running);
+    resident_proposal.awaiting_input = true;
+    resident_proposal.result = Some("proposal ready".to_string());
 
-    assert!(WaitMode::Any.condition_met(&one_done));
-    assert!(!WaitMode::All.condition_met(&one_done));
-    assert!(WaitMode::All.condition_met(&all_done));
+    assert!(WaitMode::Any.condition_met(&one_done, false));
+    assert!(!WaitMode::All.condition_met(&one_done, false));
+    assert!(WaitMode::All.condition_met(&all_done, false));
+    assert!(!WaitMode::Any.condition_met(std::slice::from_ref(&resident_proposal), false));
+    assert!(WaitMode::Any.condition_met(&[resident_proposal], true));
 }
 
 #[test]
@@ -542,6 +579,119 @@ fn test_parse_wait_ids_accepts_aliases() {
 fn test_parse_wait_ids_empty_when_omitted() {
     let ids = parse_wait_ids(&json!({}));
     assert!(ids.is_empty());
+}
+
+#[test]
+fn game_wait_timeout_is_short_and_clamped() {
+    assert_eq!(bounded_wait_timeout_ms(&json!({}), true), 8_000);
+    assert_eq!(
+        bounded_wait_timeout_ms(&json!({"timeout_ms": 120_000}), true),
+        15_000
+    );
+    assert_eq!(bounded_wait_timeout_ms(&json!({"timeout_ms": 0}), true), 1);
+    assert_eq!(
+        bounded_wait_timeout_ms(&json!({"timeout_ms": 0}), false),
+        10_000
+    );
+    assert_eq!(
+        AgentResultTool::with_name(
+            Arc::new(RwLock::new(SubAgentManager::new(PathBuf::from("."), 1))),
+            "game_agent_result",
+        )
+        .input_schema()["properties"]["timeout_ms"]["description"],
+        json!(
+            "Max wait time in milliseconds. Generic result waits default to 30000 and clamp to 1000-3600000; game result waits default to 8000 and clamp to 1-15000."
+        )
+    );
+}
+
+#[tokio::test]
+async fn game_agent_wait_keeps_running_agents_on_timeout() {
+    let manager = Arc::new(RwLock::new(SubAgentManager::new(PathBuf::from("."), 2)));
+    let (input_tx, _input_rx) = mpsc::unbounded_channel();
+    let agent = SubAgent::new(
+        SubAgentType::General,
+        "prompt".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        Some("Blue".to_string()),
+        Some(vec!["read_file".to_string()]),
+        input_tx,
+        "boot_test".to_string(),
+    );
+    let agent_id = agent.id.clone();
+    {
+        let mut guard = manager.write().await;
+        guard.agents.insert(agent_id.clone(), agent);
+    }
+
+    let tool = AgentWaitTool::new(manager.clone(), "game_agent_wait");
+    let result = tool
+        .execute(
+            json!({"ids": [agent_id.clone()], "timeout_ms": 1}),
+            &ToolContext::new(PathBuf::from(".")),
+        )
+        .await
+        .expect("game_agent_wait should return timed-out snapshots");
+
+    let snapshots: Vec<SubAgentResult> =
+        serde_json::from_str(&result.content).expect("sub-agent snapshots");
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].status, SubAgentStatus::Running);
+    let metadata = result.metadata.expect("timeout metadata");
+    assert_eq!(metadata["timed_out"], true);
+    assert_eq!(metadata["cancelled_on_timeout"], json!([]));
+    assert_eq!(metadata["running_ids"], json!([agent_id]));
+    assert!(
+        metadata["guidance"]
+            .as_str()
+            .is_some_and(|guidance| guidance.contains("still running in parallel")),
+        "{metadata}"
+    );
+}
+
+#[tokio::test]
+async fn game_agent_result_block_keeps_running_agent_on_timeout() {
+    let manager = Arc::new(RwLock::new(SubAgentManager::new(PathBuf::from("."), 2)));
+    let (input_tx, _input_rx) = mpsc::unbounded_channel();
+    let agent = SubAgent::new(
+        SubAgentType::General,
+        "prompt".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        Some("Blue".to_string()),
+        Some(vec!["read_file".to_string()]),
+        input_tx,
+        "boot_test".to_string(),
+    );
+    let agent_id = agent.id.clone();
+    {
+        let mut guard = manager.write().await;
+        guard.agents.insert(agent_id.clone(), agent);
+    }
+
+    let tool = AgentResultTool::with_name(manager.clone(), "game_agent_result");
+    let result = tool
+        .execute(
+            json!({"id": agent_id.clone(), "block": true, "timeout_ms": 1}),
+            &ToolContext::new(PathBuf::from(".")),
+        )
+        .await
+        .expect("game_agent_result should return timed-out running game agent");
+
+    let snapshot: SubAgentResult =
+        serde_json::from_str(&result.content).expect("sub-agent snapshot");
+    assert_eq!(snapshot.status, SubAgentStatus::Running);
+    let metadata = result.metadata.expect("timeout metadata");
+    assert_eq!(metadata["timed_out"], true);
+    assert_eq!(metadata["timeout_ms"], json!(1));
+    assert_eq!(metadata["cancelled_on_timeout"], json!([]));
+    assert!(
+        metadata["guidance"]
+            .as_str()
+            .is_some_and(|guidance| guidance.contains("still running in parallel")),
+        "{metadata}"
+    );
 }
 
 #[test]
@@ -675,9 +825,10 @@ async fn test_wait_for_result_reports_timeout_when_still_running() {
         guard.agents.insert(agent_id.clone(), agent);
     }
 
-    let (snapshot, timed_out) = wait_for_result(&manager, &agent_id, Duration::from_millis(10))
-        .await
-        .expect("wait_for_result should succeed");
+    let (snapshot, timed_out) =
+        wait_for_result(&manager, &agent_id, Duration::from_millis(10), false)
+            .await
+            .expect("wait_for_result should succeed");
     assert!(timed_out);
     assert_eq!(snapshot.status, SubAgentStatus::Running);
 }
@@ -711,6 +862,135 @@ async fn test_running_count_counts_only_agents_with_live_task_handles() {
         .and_then(|agent| agent.task_handle.take())
         .expect("live task handle")
         .abort();
+}
+
+#[tokio::test]
+async fn active_running_count_excludes_awaiting_input_processors() {
+    let mut manager = SubAgentManager::new(PathBuf::from("."), 2);
+    let (waiting_tx, _waiting_rx) = mpsc::unbounded_channel();
+    let mut waiting = SubAgent::new(
+        SubAgentType::General,
+        "prewarm".to_string(),
+        SubAgentAssignment::new("prewarm".to_string(), Some("state".to_string())),
+        "deepseek-v4-flash".to_string(),
+        Some("Blue".to_string()),
+        Some(vec!["game_status".to_string()]),
+        waiting_tx,
+        "boot_test".to_string(),
+    );
+    waiting.status = SubAgentStatus::Running;
+    waiting.awaiting_input = true;
+    waiting.task_handle = Some(tokio::spawn(async {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+    }));
+    let waiting_id = waiting.id.clone();
+
+    let (active_tx, _active_rx) = mpsc::unbounded_channel();
+    let mut active = SubAgent::new(
+        SubAgentType::General,
+        "active".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        Some("Humpback".to_string()),
+        Some(vec!["read_file".to_string()]),
+        active_tx,
+        "boot_test".to_string(),
+    );
+    active.status = SubAgentStatus::Running;
+    active.task_handle = Some(tokio::spawn(async {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+    }));
+    let active_id = active.id.clone();
+
+    manager.agents.insert(waiting_id.clone(), waiting);
+    manager.agents.insert(active_id.clone(), active);
+
+    assert_eq!(manager.running_count(), 2);
+    assert_eq!(manager.active_running_count(), 1);
+
+    for id in [waiting_id, active_id] {
+        manager
+            .agents
+            .get_mut(&id)
+            .and_then(|agent| agent.task_handle.take())
+            .expect("live task handle")
+            .abort();
+    }
+}
+
+#[tokio::test]
+async fn running_game_proposal_keeps_resident_agent_alive_and_notifies_parent() {
+    let manager = Arc::new(RwLock::new(SubAgentManager::new(PathBuf::from("."), 2)));
+    let (input_tx, _input_rx) = mpsc::unbounded_channel();
+    let mut agent = SubAgent::new(
+        SubAgentType::General,
+        "prompt".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        Some("Blue".to_string()),
+        Some(vec!["game_status".to_string()]),
+        input_tx,
+        "boot_test".to_string(),
+    );
+    let agent_id = agent.id.clone();
+    agent.task_handle = Some(tokio::spawn(async {
+        std::future::pending::<()>().await;
+    }));
+    {
+        let mut guard = manager.write().await;
+        guard.agents.insert(agent_id.clone(), agent);
+    }
+
+    let (tx, mut rx) = mpsc::unbounded_channel::<SubAgentCompletion>();
+    let mut runtime = stub_runtime();
+    runtime.manager = manager.clone();
+    runtime.spawn_depth = 1;
+    runtime.parent_completion_tx = Some(tx);
+
+    publish_running_proposal(
+        &runtime,
+        &agent_id,
+        &SubAgentType::General,
+        &make_assignment(),
+        Some("### SUMMARY\nUse a restrained reply.\n\n### DETAILS\nKeep her guarded.".to_string()),
+        2,
+        Instant::now(),
+    )
+    .await;
+
+    let snapshot = {
+        let guard = manager.read().await;
+        assert_eq!(guard.running_count(), 1);
+        assert_eq!(guard.active_running_count(), 0);
+        guard.get_result(&agent_id).expect("resident snapshot")
+    };
+    assert_eq!(snapshot.status, SubAgentStatus::Running);
+    assert!(snapshot.awaiting_input);
+    assert!(
+        snapshot
+            .result
+            .as_deref()
+            .is_some_and(|text| text.contains("restrained reply"))
+    );
+
+    let (ready, timed_out) = wait_for_result(&manager, &agent_id, Duration::from_millis(1), true)
+        .await
+        .expect("game wait should accept resident proposal");
+    assert!(!timed_out);
+    assert_eq!(ready.status, SubAgentStatus::Running);
+    assert!(ready.awaiting_input);
+
+    let completion = rx.try_recv().expect("parent completion notification");
+    assert_eq!(completion.agent_id, agent_id);
+    assert!(completion.payload.contains("Use a restrained reply."));
+    assert!(completion.payload.contains("\"status\":\"running\""));
+
+    let mut guard = manager.write().await;
+    if let Some(agent) = guard.agents.get_mut(&completion.agent_id)
+        && let Some(handle) = agent.task_handle.take()
+    {
+        handle.abort();
+    }
 }
 
 #[test]

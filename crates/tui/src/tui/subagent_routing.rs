@@ -12,12 +12,22 @@ use crate::tui::widgets::agent_card::{
 };
 
 pub(super) fn running_agent_count(app: &App) -> usize {
-    let mut ids: std::collections::HashSet<&str> =
-        app.agent_progress.keys().map(String::as_str).collect();
+    let awaiting_ids: std::collections::HashSet<&str> = app
+        .subagent_cache
+        .iter()
+        .filter(|agent| matches!(agent.status, SubAgentStatus::Running) && agent.awaiting_input)
+        .map(|agent| agent.agent_id.as_str())
+        .collect();
+    let mut ids: std::collections::HashSet<&str> = app
+        .agent_progress
+        .keys()
+        .map(String::as_str)
+        .filter(|id| !awaiting_ids.contains(id))
+        .collect();
     for agent in app
         .subagent_cache
         .iter()
-        .filter(|agent| matches!(agent.status, SubAgentStatus::Running))
+        .filter(|agent| matches!(agent.status, SubAgentStatus::Running) && !agent.awaiting_input)
     {
         ids.insert(agent.agent_id.as_str());
     }
@@ -45,7 +55,7 @@ pub(super) fn reconcile_subagent_activity_state(app: &mut App) {
     let running_agents: Vec<(String, String)> = app
         .subagent_cache
         .iter()
-        .filter(|agent| matches!(agent.status, SubAgentStatus::Running))
+        .filter(|agent| matches!(agent.status, SubAgentStatus::Running) && !agent.awaiting_input)
         .map(|agent| {
             (
                 agent.agent_id.clone(),

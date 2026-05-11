@@ -10,7 +10,10 @@ use crate::interaction::build_playbook;
 use crate::lookup::{HARD_LOOKUP_BYTES, LookupRequest, lookup};
 use crate::manifest::load_game;
 use crate::render::{RenderPanelKind, render_panels, render_view_snapshot};
-use crate::save::{CommitRequest, STATE_FILE, TURN_LOG_FILE, commit_turn, load_save};
+use crate::save::{
+    CommitRequest, STATE_FILE, TURN_LOG_FILE, commit_turn, create_save_from_template,
+    create_save_from_template_root, load_save,
+};
 use crate::script::{DriverCall, run_driver_function};
 use crate::{GameError, demo};
 
@@ -205,6 +208,90 @@ fn save_loads_commits_merge_patch_and_rejects_stale_revision() {
 }
 
 #[test]
+fn missing_named_save_can_be_created_from_template() {
+    let temp = TempDir::new("save-template");
+    let save_root = temp.path().join("saves/default");
+    fs::create_dir_all(&save_root).expect("create save");
+    let state = demo::reconciliation_initial_state("galgame", "0.1.0");
+    fs::write(
+        save_root.join(STATE_FILE),
+        serde_json::to_vec_pretty(&state).expect("serialize state"),
+    )
+    .expect("write state");
+    fs::write(save_root.join(TURN_LOG_FILE), "").expect("write turn log");
+    fs::write(save_root.join("SUMMARY.md"), "template summary").expect("write summary");
+    fs::write(
+        save_root.join("AGENTS.json"),
+        r#"{"npc":"ready","assigned_files":["saves/default/STATE.json"]}"#,
+    )
+    .expect("write agents");
+
+    create_save_from_template(temp.path().join("saves"), "new1", "default")
+        .expect("new save should be created");
+
+    let created = load_save(temp.path().join("saves"), "new1").expect("created save should load");
+    assert_eq!(created.state, state);
+    assert!(created.turns.is_empty());
+    assert_eq!(created.summary.as_deref(), Some("template summary"));
+    assert_eq!(
+        created.agents,
+        Some(json!({"npc": "ready", "assigned_files": ["saves/new1/STATE.json"]}))
+    );
+    assert_eq!(
+        fs::read_to_string(temp.path().join("saves/new1/TURN_LOG.jsonl")).expect("read turn log"),
+        ""
+    );
+
+    fs::create_dir(temp.path().join("saves/new-empty")).expect("create empty save dir");
+    create_save_from_template(temp.path().join("saves"), "new-empty", "default")
+        .expect("empty existing save directory should be populated");
+    let created_empty =
+        load_save(temp.path().join("saves"), "new-empty").expect("empty dir save should load");
+    assert_eq!(created_empty.state, state);
+
+    let duplicate = create_save_from_template(temp.path().join("saves"), "new1", "default")
+        .expect_err("existing save should not be overwritten");
+    assert!(matches!(duplicate, GameError::Write { .. }));
+}
+
+#[test]
+fn missing_named_save_can_be_created_from_separate_template_root() {
+    let temp = TempDir::new("save-template-root");
+    let live_save_root = temp.path().join("saves/default");
+    let template_save_root = temp.path().join("save_templates/default");
+    fs::create_dir_all(&live_save_root).expect("create live save");
+    fs::create_dir_all(&template_save_root).expect("create template save");
+
+    let mut live_state = demo::reconciliation_initial_state("galgame", "0.1.0");
+    live_state["revision"] = json!(7);
+    live_state["player"]["stats"]["relationship_score"] = json!(-100);
+    let template_state = demo::reconciliation_initial_state("galgame", "0.1.0");
+    fs::write(
+        live_save_root.join(STATE_FILE),
+        serde_json::to_vec_pretty(&live_state).expect("serialize live state"),
+    )
+    .expect("write live state");
+    fs::write(live_save_root.join(TURN_LOG_FILE), "{}\n").expect("write live turn log");
+    fs::write(
+        template_save_root.join(STATE_FILE),
+        serde_json::to_vec_pretty(&template_state).expect("serialize template state"),
+    )
+    .expect("write template state");
+
+    create_save_from_template_root(
+        temp.path().join("saves"),
+        "new1",
+        temp.path().join("save_templates"),
+        "default",
+    )
+    .expect("new save should be created from separate template root");
+
+    let created = load_save(temp.path().join("saves"), "new1").expect("created save should load");
+    assert_eq!(created.state, template_state);
+    assert!(created.turns.is_empty());
+}
+
+#[test]
 fn lookup_is_bounded_and_rejects_handle_traversal() {
     let temp = TempDir::new("lookup");
     let game = temp.path().join("game");
@@ -272,6 +359,12 @@ fn render_view_snapshot_projects_player_console_data() {
 
     assert_eq!(view.scene_title, "station overpass");
     assert!(view.scene.contains("walking away"));
+    assert_eq!(
+        view.scene_art_source
+            .as_ref()
+            .map(|source| source.path.as_str()),
+        Some("assets/scenes/station-overpass/Opening.ansi")
+    );
     assert_eq!(view.figure_title, "绫波丽 (Ayanami Rei)");
     assert!(view.figure.contains("Last:"));
     assert_eq!(view.figure_emotion.as_deref(), Some("sad"));
@@ -293,6 +386,46 @@ fn render_view_snapshot_projects_player_console_data() {
     );
     assert_eq!(view.choices.len(), 3);
     assert_eq!(view.validation, "valid");
+}
+
+#[test]
+fn reconciliation_scene_pack_maps_story_beats_to_station_frames() {
+    let state = demo::reconciliation_initial_state("galgame", "0.1.0");
+    let frames = state
+        .pointer("/ui/scene_art/frames")
+        .and_then(Value::as_object)
+        .expect("scene frames should be present");
+    let expected = [
+        ("opening", "Opening.ansi"),
+        ("confrontation", "Confrontation.ansi"),
+        ("embrace", "Embrace.ansi"),
+        ("argument", "Argument.ansi"),
+        ("emotional_distance", "Emotional_distance.ansi"),
+        ("separation", "Separation.ansi"),
+    ];
+
+    assert_eq!(frames.len(), expected.len());
+    for (key, file) in expected {
+        assert_eq!(
+            frames
+                .get(key)
+                .and_then(|entry| entry.get("file"))
+                .and_then(Value::as_str),
+            Some(file),
+            "{key}"
+        );
+    }
+
+    let mut state = state;
+    state["ui"]["scene_art"]["active"] = Value::Null;
+    state["story"]["active_node"] = json!("success");
+    let view = render_view_snapshot(&state);
+    assert_eq!(
+        view.scene_art_source
+            .as_ref()
+            .map(|source| source.path.as_str()),
+        Some("assets/scenes/station-overpass/Embrace.ansi")
+    );
 }
 
 #[test]

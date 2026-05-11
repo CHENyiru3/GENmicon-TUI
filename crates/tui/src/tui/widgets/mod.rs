@@ -18,7 +18,7 @@ pub mod tool_card;
 pub use footer::{
     FooterProps, FooterToast, FooterWidget, footer_agents_chip, footer_working_label,
 };
-pub use game_console::GameConsoleWidget;
+pub use game_console::{GameConsoleWidget, game_console_scroll_bounds};
 pub use header::{HeaderData, HeaderWidget};
 pub use renderable::Renderable;
 

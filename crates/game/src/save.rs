@@ -86,6 +86,106 @@ pub fn load_save(saves_root: impl AsRef<Path>, save_id: &str) -> Result<LoadedSa
     })
 }
 
+pub fn create_save_from_template(
+    saves_root: impl AsRef<Path>,
+    save_id: &str,
+    template_save_id: &str,
+) -> Result<()> {
+    create_save_from_template_root(
+        saves_root.as_ref(),
+        save_id,
+        saves_root.as_ref(),
+        template_save_id,
+    )
+}
+
+pub fn create_save_from_template_root(
+    saves_root: impl AsRef<Path>,
+    save_id: &str,
+    template_saves_root: impl AsRef<Path>,
+    template_save_id: &str,
+) -> Result<()> {
+    validate_save_id(save_id)?;
+    validate_save_id(template_save_id)?;
+    let saves_root = paths::canonicalize_root(saves_root, "saves root")?;
+    let template_saves_root = paths::canonicalize_root(template_saves_root, "save template root")?;
+    let target_root = paths::resolve_under(&saves_root, save_id, "save id")?;
+    let template = load_save(&template_saves_root, template_save_id)?;
+
+    prepare_new_save_dir(&target_root)?;
+    write_json_atomic(&target_root.join(STATE_FILE), &template.state)?;
+    write_bytes_atomic(&target_root.join(TURN_LOG_FILE), b"")?;
+    if let Some(summary) = template.summary {
+        write_bytes_atomic(&target_root.join("SUMMARY.md"), summary.as_bytes())?;
+    }
+    if let Some(mut agents) = template.agents {
+        rewrite_template_save_references(&mut agents, save_id, template_save_id);
+        write_json_atomic(&target_root.join("AGENTS.json"), &agents)?;
+    }
+    Ok(())
+}
+
+fn rewrite_template_save_references(value: &mut Value, save_id: &str, template_save_id: &str) {
+    match value {
+        Value::String(text) => {
+            for (from, to) in [
+                (
+                    format!("saves/{template_save_id}/"),
+                    format!("saves/{save_id}/"),
+                ),
+                (
+                    format!("save_templates/{template_save_id}/"),
+                    format!("saves/{save_id}/"),
+                ),
+            ] {
+                if text.contains(&from) {
+                    *text = text.replace(&from, &to);
+                }
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                rewrite_template_save_references(value, save_id, template_save_id);
+            }
+        }
+        Value::Object(map) => {
+            for value in map.values_mut() {
+                rewrite_template_save_references(value, save_id, template_save_id);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+fn prepare_new_save_dir(target_root: &Path) -> Result<()> {
+    match std::fs::create_dir(target_root) {
+        Ok(()) => Ok(()),
+        Err(source)
+            if source.kind() == std::io::ErrorKind::AlreadyExists && target_root.is_dir() =>
+        {
+            let mut entries = std::fs::read_dir(target_root).map_err(|source| GameError::Read {
+                path: target_root.to_path_buf(),
+                source,
+            })?;
+            if entries.next().is_none() {
+                Ok(())
+            } else {
+                Err(GameError::Write {
+                    path: target_root.to_path_buf(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::AlreadyExists,
+                        "save directory is not empty",
+                    ),
+                })
+            }
+        }
+        Err(source) => Err(GameError::Write {
+            path: target_root.to_path_buf(),
+            source,
+        }),
+    }
+}
+
 pub fn read_state(path: impl AsRef<Path>) -> Result<Value> {
     let path = path.as_ref();
     let raw = std::fs::read_to_string(path).map_err(|source| GameError::Read {

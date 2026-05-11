@@ -358,6 +358,11 @@ Planned package shape:
       skills/
         npc/
           <npc-id>/SKILL.md
+  save_templates/
+    <save-id>/
+      STATE.json
+      TURN_LOG.jsonl
+      AGENTS.json
 ```
 
 Required V1 files:
@@ -376,6 +381,9 @@ Optional V1 files:
 - `saves/<save-id>/AGENTS.json`: generated sub-agent roster and summaries.
 - `saves/<save-id>/skills/npc/**`: per-save NPC skill overlays produced by
   committed play.
+- `save_templates/<save-id>/**`: immutable starting saves used when creating a
+  missing explicit `--save <id>`. Templates are read-only package data, not live
+  play state.
 
 ## Game Package Manifest
 
@@ -401,6 +409,7 @@ roots = ["content"]
 
 [saves]
 root = "saves"
+template_root = "save_templates"
 
 [audio]
 enabled = false
@@ -428,6 +437,12 @@ Rules:
 - `game.title` is player-facing.
 - `game.entry_skill` names `skills/<name>/SKILL.md` when present.
 - `game.default_save` is used when the user does not pass `--save`.
+- When the user passes a filesystem-safe `--save <id>` that does not exist,
+  player mode creates it from `saves.template_root/game.default_save` when that
+  template root is configured, otherwise from `saves.root/game.default_save`.
+  The created live save gets an empty `TURN_LOG.jsonl`, so
+  `deepseek play ... --save new1` starts a separate run without mutating the
+  template.
 - `driver.id` names a globally installed driver.
 - `driver.version` is a semver requirement resolved at game launch.
 - content and save paths must resolve under the game root.
@@ -761,6 +776,50 @@ session and loaded by name when needed. They are scoped instructions only: they
 cannot expand the player tool profile, escape the game or driver roots, override
 save authority, or change the approval/sandbox policy.
 
+### Game Turn Controller
+
+Player-mode Game Console uses an explicit controller contract instead of relying
+on many prompt layers to independently steer the same behavior. The controller
+owns the turn order and invariants; skills, driver prompts, and sub-agents are
+scoped modules that supply local policy or proposals. The prompt text lives in
+`crates/tui/src/prompts/game_console.md` and is composed by `prompts.rs` as a
+single Game Console prompt file.
+
+Closed-loop turn sequence:
+
+```text
+observe -> classify -> estimate -> constrain -> commit -> render
+```
+
+Priority order:
+
+```text
+controller > save invariants > action skill > driver skill > NPC proposal > storytelling style
+```
+
+Controller responsibilities:
+
+- observe the active save revision, render view, playbook, and needed facts
+- classify the exact player input into one declared action skill when action
+  skills are present
+- estimate consequence with only needed skills, scoped game sub-agents, and
+  deterministic driver calls
+- constrain output through language, fact gates, branch consistency, and
+  player-mode hiding before narration or commit
+- commit exactly one authoritative turn with `game_commit_turn`
+- render only player-facing scene, dialogue, visible consequence, and concise
+  choices
+
+Required invariants:
+
+- `story.active_node` stays aligned with
+  `story.branches[story.active_branch].head`
+- `game_commit_turn.expected_revision` matches the current save revision
+- sub-agents propose only; the main game session remains final narrator and
+  commit authority
+- normal player mode never reveals tool calls, waits, routing, hidden scores,
+  branch gates, or controller trace text
+
 The model-visible game prompt should combine:
 
 - base Game TUI contract
@@ -811,6 +870,9 @@ Sub-agent rules:
 
 - sub-agents propose; they never commit authoritative state
 - the main session is the only final narrator
+- normal player mode never narrates model analysis, routing, rules loading,
+  tool calls, waits, sub-agent status, hidden scores, branch/gate evaluation, or
+  praise/scoring of the player's choice
 - the runtime and `game_commit_turn` are the only commit authority
 - sub-agents receive scoped context only
 - sub-agents in player mode use game-safe tools, not the full coding tool
@@ -818,6 +880,15 @@ Sub-agent rules:
 - old sub-agent transcripts are not required for reload
 - game sub-agents are accessed through `game_agent_*` helpers, not generic
   `agent_spawn` in player mode
+- player mode prewarms declared packs when the Game Console opens: each
+  prewarmed processor uses `deepseek-v4-flash` with thinking disabled, returns
+  a minimal ready handoff, and stays running across `game_agent_send`
+  assignments
+- `game_agent_wait` and blocking `game_agent_result` reads use short,
+  player-facing timeouts and preserve still-running waited processors on
+  timeout; those processors continue in parallel and may later resume the main
+  turn with a proposal, while the main session must not repeatedly wait on a
+  slow processor
 - `game_agent_spawn` must bind to a declared generated pack such as
   `dialogue_girlfriend` when packs are available, so active NPC dialogue does
   not fall back to an unscoped generic worker
@@ -1046,13 +1117,13 @@ command help text, localization message IDs, and tests in the same patch.
 CLI:
 
 ```text
-deepseek play [game-or-path] [--save <id>] [--dev]
+deepseek play [game-or-path] [--save <id>] [--lang en|zh] [--dev]
 ```
 
 Slash commands:
 
 ```text
-/play [game-or-path]
+/play [game-or-path] [--save <id>] [--lang en|zh] [--dev]
 /game status
 /game render
 /game choices

@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "topology": "dynamic-main-plus-managers",
+  "agents": [
+    {
+      "slot": "state",
+      "summary": "Track relationship score, flags, facts, quests, and continuity gates.",
+      "assigned_files": [
+        "saves/new2/STATE.json"
+      ],
+      "last_seen_revision": 0
+    },
+    {
+      "slot": "plot",
+      "summary": "Keep the scene on the reconciliation branch and move story nodes only when gates are satisfied.",
+      "assigned_files": [
+        "content/scene.md",
+        "content/endings.md"
+      ],
+      "last_seen_revision": 0
+    },
+    {
+      "slot": "dialogue_girlfriend",
+      "role": "dialogue",
+      "controls": [
+        "girlfriend"
+      ],
+      "summary": "Own 绫波丽 (Ayanami Rei)'s proposed dialogue, reactions, emotional state, and memory triggers.",
+      "assigned_files": [
+        "content/scene.md",
+        "content/backstory.md",
+        "skills/npc/girlfriend/SKILL.md",
+        "saves/new2/STATE.json"
+      ],
+      "last_seen_revision": 0
+    }
+  ]
+}

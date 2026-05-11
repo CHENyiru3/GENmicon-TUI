@@ -23,3 +23,11 @@ Useful details:
 - A direct apology matters only if it names the hurt.
 - Recalling the Tokyo memory can help only if the player admits how they
   broke that promise.
+
+Visual beats:
+- `opening`: The last chance to speak before she reaches the stairs.
+- `confrontation`: They face each other under cold station lights.
+- `embrace`: The reconciliation branch resolves into a fragile hug.
+- `argument`: The failure branch begins with pressure or anger.
+- `emotional_distance`: Both turn away after the conflict.
+- `separation`: She descends toward the platform alone.

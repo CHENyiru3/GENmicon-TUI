@@ -6,7 +6,7 @@ use deepseek_game::driver::{DriverResolver, LoadedDriver};
 use deepseek_game::interaction::{ActionSkill, build_playbook, format_playbook};
 use deepseek_game::manifest::LoadedGame;
 use deepseek_game::render::{GameViewSnapshot, RenderPanel, render_panels, render_view_snapshot};
-use deepseek_game::save::{LoadedSave, driver_lock, load_save};
+use deepseek_game::save::{LoadedSave, create_save_from_template_root, driver_lock, load_save};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -360,7 +360,7 @@ impl LoadedGameSession {
                         lines.push(format!("  files: {}", pack.allowed_files.join(", ")));
                     }
                 }
-                lines.push("Use game_agent_list to reuse live processors. For active NPC dialogue, reactions, memories, or stateful character behavior, call game_agent_spawn with pack/role set to the matching scoped pack, wait with game_agent_wait or game_agent_result, and treat the result as a proposal only. Final narration and save writes stay in the main session through game_commit_turn.".to_string());
+                lines.push("The runtime prewarms declared packs when player mode opens. Use game_agent_list to reuse a running processor; send the current player action with game_agent_send. If no suitable live processor exists, spawn all needed processors in the same assistant turn with game_agent_spawn using pack/role set to the matching scoped pack. Wait at most once with game_agent_wait or read an already finished proposal with game_agent_result; if it times out, the processor keeps running in parallel, so continue immediately in the main game session without spawning a replacement or waiting again. When a scoped game sub-agent later publishes a proposal, the runtime resumes the main turn with its completion event; use that proposal, fetch game_agent_result only if needed, and continue automatically to game_commit_turn without asking for another player input. Treat any sub-agent result as a proposal only. Final narration and save writes stay in the main session through game_commit_turn.".to_string());
             }
             Err(err) if self.developer_mode => {
                 lines.push(String::new());
@@ -519,6 +519,7 @@ fn append_player_rules(lines: &mut Vec<String>, language: GameLanguage) {
     lines.push("- Type a natural action, a line of dialogue, a numbered choice, or a bracket command shown by the current cartridge.".to_string());
     lines.push("- When the playbook lists action skills, every action must fit exactly one listed skill. Free wording is allowed inside that skill; actions outside the skill set are not valid.".to_string());
     lines.push("- The opening must always restate the background story in the selected language before the first live dialogue beat. After that, keep Dialogue focused on chat and immediate narration; status, tasks, items, choices, and story details belong in their own panels.".to_string());
+    lines.push("- Player-facing responses must not expose model analysis, routing, rules loading, tool calls, waits, sub-agent status, action-skill classification, branch/gate evaluation, hidden variables, or praise/scoring of the player's choice. Use tools silently, then answer in-world.".to_string());
     lines.push(
         "- Use /game choices for current options, /game render for the scene, /game status for save status, and /skill rule-repeat to see this guide again."
             .to_string(),
@@ -544,12 +545,48 @@ pub fn load_game_session(workspace: &Path, launch: GameLaunchOptions) -> Result<
             }));
         }
     };
-    let save_id = launch
-        .save
-        .or_else(|| loaded_game.manifest.game.default_save.clone())
+    let requested_save = launch.save;
+    let template_save_id = loaded_game
+        .manifest
+        .game
+        .default_save
+        .clone()
         .unwrap_or_else(|| "default".to_string());
+    let save_id = requested_save
+        .clone()
+        .unwrap_or_else(|| template_save_id.clone());
     let loaded_save = match load_save(&loaded_game.saves_root, &save_id) {
         Ok(save) => save,
+        Err(err) if requested_save.is_some() && is_missing_save_error(&err) => {
+            let template_root = loaded_game
+                .save_templates_root
+                .as_deref()
+                .unwrap_or(&loaded_game.saves_root);
+            if let Err(create_err) = create_save_from_template_root(
+                &loaded_game.saves_root,
+                &save_id,
+                template_root,
+                &template_save_id,
+            ) {
+                return Ok(GameSession::Notice(GameSessionNotice {
+                    message: format!(
+                        "failed to create save {save_id} from {template_save_id}: {create_err}"
+                    ),
+                    developer_mode: launch.developer_mode,
+                    language: launch.language,
+                }));
+            }
+            match load_save(&loaded_game.saves_root, &save_id) {
+                Ok(save) => save,
+                Err(load_err) => {
+                    return Ok(GameSession::Notice(GameSessionNotice {
+                        message: format!("failed to load created save {save_id}: {load_err}"),
+                        developer_mode: launch.developer_mode,
+                        language: launch.language,
+                    }));
+                }
+            }
+        }
         Err(err) => {
             return Ok(GameSession::Notice(GameSessionNotice {
                 message: format!("failed to load save {save_id}: {err}"),
@@ -572,6 +609,14 @@ pub fn load_game_session(workspace: &Path, launch: GameLaunchOptions) -> Result<
             language: launch.language,
         })),
     }
+}
+
+fn is_missing_save_error(err: &deepseek_game::GameError) -> bool {
+    matches!(
+        err,
+        deepseek_game::GameError::Read { source, .. }
+            if source.kind() == std::io::ErrorKind::NotFound
+    )
 }
 
 fn resolve_game_root(workspace: &Path, explicit: Option<&Path>) -> Option<PathBuf> {
@@ -739,8 +784,14 @@ mod tests {
             intro.contains("The opening must always restate the background story"),
             "{intro}"
         );
+        assert!(
+            intro.contains("Player-facing responses must not expose model analysis"),
+            "{intro}"
+        );
         assert!(intro.contains("Scoped game sub-agents"), "{intro}");
         assert!(intro.contains("dialogue_girlfriend"), "{intro}");
+        assert!(intro.contains("prewarms declared packs"), "{intro}");
+        assert!(intro.contains("game_agent_send"), "{intro}");
         assert!(intro.contains("game_agent_spawn"), "{intro}");
         assert!(intro.contains("skills/npc/girlfriend/SKILL.md"), "{intro}");
 
@@ -757,6 +808,63 @@ mod tests {
         let rules = session.rules_report().expect("rules report");
         assert!(rules.contains("Rule Repeat"), "{rules}");
         assert!(rules.contains("Current playbook"), "{rules}");
+    }
+
+    #[test]
+    fn missing_explicit_save_creates_fresh_save_from_template_root() {
+        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("examples/games/reconciliation-demo");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let game = temp.path().join("reconciliation-demo");
+        copy_dir_recursive(&source, &game).expect("copy example game");
+        let _ = fs::remove_dir_all(game.join("saves/new1"));
+        let mut progressed_state =
+            deepseek_game::save::read_state(game.join("saves/default/STATE.json"))
+                .expect("default state");
+        progressed_state["revision"] = json!(7);
+        progressed_state["player"]["stats"]["relationship_score"] = json!(-100);
+        fs::write(
+            game.join("saves/default/STATE.json"),
+            serde_json::to_vec_pretty(&progressed_state).expect("serialize progressed state"),
+        )
+        .expect("write progressed default state");
+
+        let session = load_game_session(
+            Path::new("."),
+            GameLaunchOptions {
+                game_or_path: Some(game.clone()),
+                save: Some("new1".to_string()),
+                developer_mode: false,
+                language: GameLanguage::Chinese,
+            },
+        )
+        .expect("missing explicit save should be created");
+
+        let GameSession::Loaded(session) = session else {
+            panic!("expected loaded session for created save");
+        };
+        assert_eq!(session.save_id, "new1");
+        assert_eq!(session.language, GameLanguage::Chinese);
+
+        let template_state =
+            deepseek_game::save::read_state(game.join("save_templates/default/STATE.json"))
+                .expect("template state");
+        let created_state = deepseek_game::save::read_state(game.join("saves/new1/STATE.json"))
+            .expect("created state");
+        assert_eq!(created_state, template_state);
+        assert_eq!(
+            created_state.get("revision").and_then(Value::as_u64),
+            Some(0)
+        );
+        assert_eq!(
+            fs::read_to_string(game.join("saves/new1/TURN_LOG.jsonl")).expect("turn log"),
+            ""
+        );
+        let created_agents =
+            fs::read_to_string(game.join("saves/new1/AGENTS.json")).expect("agents");
+        assert!(created_agents.contains("saves/new1/STATE.json"));
+        assert!(!created_agents.contains("saves/default/STATE.json"));
     }
 
     #[test]
@@ -943,5 +1051,20 @@ root = "saves"
             "notice should name the missing locked version: {}",
             notice.message
         );
+    }
+
+    fn copy_dir_recursive(from: &Path, to: &Path) -> std::io::Result<()> {
+        fs::create_dir_all(to)?;
+        for entry in fs::read_dir(from)? {
+            let entry = entry?;
+            let ty = entry.file_type()?;
+            let target = to.join(entry.file_name());
+            if ty.is_dir() {
+                copy_dir_recursive(&entry.path(), &target)?;
+            } else if ty.is_file() {
+                fs::copy(entry.path(), target)?;
+            }
+        }
+        Ok(())
     }
 }

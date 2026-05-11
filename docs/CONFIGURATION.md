@@ -532,7 +532,12 @@ roots = ["~/.deepseek/game-drivers"]
 
 Current launch resolution is explicit CLI/slash argument first, then the current
 workspace if it contains `game.toml`. Driver lookup checks the game package's
-local `drivers/` directory and `~/.deepseek/game-drivers`.
+local `drivers/` directory and `~/.deepseek/game-drivers`. Passing
+`--save <id>` or `/play ... --save <id>` loads that save when it exists; when
+the ID is filesystem-safe and missing, the loader creates it from the package's
+configured save template root and `default_save` with an empty turn log for a
+fresh separate run. If a cartridge does not configure a save template root, the
+loader falls back to the live saves root.
 
 The intended future resolution order remains CLI flags, slash command
 arguments, `[game]` config, current workspace `game.toml`, then the game picker.

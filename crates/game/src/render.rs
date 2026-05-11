@@ -5,6 +5,8 @@ use crate::interaction::{build_playbook, format_playbook, format_scene_frame};
 
 const DEFAULT_SCENE_RATIO_COLS: u16 = 4;
 const DEFAULT_SCENE_RATIO_ROWS: u16 = 3;
+const DEFAULT_SCENE_ART_COLS: u16 = 120;
+const DEFAULT_SCENE_ART_ROWS: u16 = 50;
 const DEFAULT_FIGURE_RATIO_COLS: u16 = 1;
 const DEFAULT_FIGURE_RATIO_ROWS: u16 = 1;
 const DEFAULT_REACTION_COLS: u16 = 120;
@@ -81,6 +83,8 @@ pub struct GameViewSnapshot {
     pub validation: String,
     #[serde(default)]
     pub scene_art: Option<AsciiArtFrame>,
+    #[serde(default)]
+    pub scene_art_source: Option<AsciiArtSource>,
     #[serde(default)]
     pub figure_art: Option<AsciiArtFrame>,
     #[serde(default)]
@@ -179,6 +183,7 @@ pub fn render_view_snapshot(state: &Value) -> GameViewSnapshot {
             .to_string()
     });
     let figure_art_source = reaction_source_for(state, &figure_emotion);
+    let scene_art_source = scene_art_source_for(state);
 
     let mut status = Vec::new();
     if let Some(player) = player {
@@ -295,6 +300,7 @@ pub fn render_view_snapshot(state: &Value) -> GameViewSnapshot {
             DEFAULT_SCENE_RATIO_COLS,
             DEFAULT_SCENE_RATIO_ROWS,
         ),
+        scene_art_source,
         figure_art: ascii_frame_at(
             state.pointer("/ui/ascii/figure_art"),
             DEFAULT_FIGURE_RATIO_COLS,
@@ -686,6 +692,107 @@ fn reaction_source_for(state: &Value, emotion: &str) -> Option<AsciiArtSource> {
             .unwrap_or(DEFAULT_REACTION_RATIO_ROWS)
             .max(1),
     })
+}
+
+fn scene_art_source_for(state: &Value) -> Option<AsciiArtSource> {
+    let root = state.pointer("/ui/scene_art")?;
+    let frames = root.get("frames").and_then(Value::as_object)?;
+    let selected_key = root
+        .get("active")
+        .and_then(Value::as_str)
+        .filter(|key| frames.contains_key(*key))
+        .or_else(|| scene_art_key_for_active_node(state, frames))
+        .or_else(|| {
+            root.get("default")
+                .and_then(Value::as_str)
+                .filter(|key| frames.contains_key(*key))
+        })?;
+    let entry = frames.get(selected_key)?;
+    let base_path = root.get("base_path").and_then(Value::as_str).unwrap_or("");
+    let file = entry
+        .get("file")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())?;
+    let path = if base_path.trim().is_empty() {
+        file.to_string()
+    } else {
+        format!("{}/{}", base_path.trim_end_matches('/'), file)
+    };
+
+    Some(AsciiArtSource {
+        path,
+        emotion: selected_key.to_string(),
+        label: entry
+            .get("label")
+            .and_then(Value::as_str)
+            .unwrap_or(selected_key)
+            .to_string(),
+        cols: u16_at(entry, "cols")
+            .or_else(|| u16_at(root, "cols"))
+            .unwrap_or(DEFAULT_SCENE_ART_COLS),
+        rows: u16_at(entry, "rows")
+            .or_else(|| u16_at(root, "rows"))
+            .unwrap_or(DEFAULT_SCENE_ART_ROWS),
+        ratio_cols: entry
+            .pointer("/ratio/cols")
+            .and_then(Value::as_u64)
+            .and_then(|value| u16::try_from(value).ok())
+            .or_else(|| {
+                root.pointer("/ratio/cols")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u16::try_from(value).ok())
+            })
+            .unwrap_or(DEFAULT_SCENE_RATIO_COLS)
+            .max(1),
+        ratio_rows: entry
+            .pointer("/ratio/rows")
+            .and_then(Value::as_u64)
+            .and_then(|value| u16::try_from(value).ok())
+            .or_else(|| {
+                root.pointer("/ratio/rows")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u16::try_from(value).ok())
+            })
+            .unwrap_or(DEFAULT_SCENE_RATIO_ROWS)
+            .max(1),
+    })
+}
+
+fn scene_art_key_for_active_node<'a>(
+    state: &Value,
+    frames: &'a serde_json::Map<String, Value>,
+) -> Option<&'a str> {
+    let active_node = state
+        .pointer("/story/active_node")
+        .and_then(Value::as_str)?;
+    if let Some(node_art) = state
+        .pointer("/story/nodes")
+        .and_then(Value::as_object)
+        .and_then(|nodes| nodes.get(active_node))
+        .and_then(|node| node.get("scene_art"))
+        .and_then(Value::as_str)
+        .filter(|key| frames.contains_key(*key))
+    {
+        return frames
+            .keys()
+            .find(|key| key.as_str() == node_art)
+            .map(|key| key.as_str());
+    }
+
+    frames
+        .iter()
+        .find(|(_, frame)| {
+            frame
+                .get("nodes")
+                .and_then(Value::as_array)
+                .is_some_and(|nodes| {
+                    nodes
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .any(|node| node == active_node)
+                })
+        })
+        .map(|(key, _)| key.as_str())
 }
 
 fn room_metrics(room: &Value) -> Vec<String> {

@@ -66,6 +66,9 @@ const RESULT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const DEFAULT_RESULT_TIMEOUT_MS: u64 = 30_000;
 const MIN_WAIT_TIMEOUT_MS: u64 = 10_000;
 const MAX_RESULT_TIMEOUT_MS: u64 = 3_600_000;
+const GAME_WAIT_DEFAULT_TIMEOUT_MS: u64 = 8_000;
+const GAME_WAIT_MIN_TIMEOUT_MS: u64 = 1;
+const GAME_WAIT_MAX_TIMEOUT_MS: u64 = 15_000;
 const COMPLETED_AGENT_RETENTION: Duration = Duration::from_secs(60 * 60);
 const SUBAGENT_STATE_SCHEMA_VERSION: u32 = 1;
 const SUBAGENT_STATE_FILE: &str = "subagents.v1.json";
@@ -424,6 +427,11 @@ pub struct SubAgentResult {
     /// keeping the records reachable via `include_archived=true`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub from_prior_session: bool,
+    /// True for resident game processors that have been prewarmed and are
+    /// intentionally waiting for the first `game_agent_send`. These should not
+    /// keep the main UI in a busy/queued state.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub awaiting_input: bool,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -435,6 +443,7 @@ pub(crate) struct SubAgentSpawnOptions {
     pub model: Option<String>,
     pub nickname: Option<String>,
     pub fork_context: bool,
+    pub keep_alive_until_input: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -459,16 +468,30 @@ impl WaitMode {
         }
     }
 
-    fn condition_met(self, snapshots: &[SubAgentResult]) -> bool {
+    fn condition_met(self, snapshots: &[SubAgentResult], accept_running_proposals: bool) -> bool {
         match self {
             Self::Any => snapshots
                 .iter()
-                .any(|snapshot| snapshot.status != SubAgentStatus::Running),
+                .any(|snapshot| wait_satisfied(snapshot, accept_running_proposals)),
             Self::All => snapshots
                 .iter()
-                .all(|snapshot| snapshot.status != SubAgentStatus::Running),
+                .all(|snapshot| wait_satisfied(snapshot, accept_running_proposals)),
         }
     }
+}
+
+fn wait_satisfied(snapshot: &SubAgentResult, accept_running_proposals: bool) -> bool {
+    snapshot.status != SubAgentStatus::Running
+        || (accept_running_proposals && running_proposal_ready(snapshot))
+}
+
+fn running_proposal_ready(snapshot: &SubAgentResult) -> bool {
+    snapshot.status == SubAgentStatus::Running
+        && snapshot.awaiting_input
+        && snapshot
+            .result
+            .as_deref()
+            .is_some_and(|text| !text.trim().is_empty())
 }
 
 #[derive(Debug, Clone)]
@@ -808,6 +831,7 @@ pub struct SubAgent {
     pub session_boot_id: String,
     input_tx: Option<mpsc::UnboundedSender<SubAgentInput>>,
     task_handle: Option<JoinHandle<()>>,
+    awaiting_input: bool,
 }
 
 impl SubAgent {
@@ -840,6 +864,7 @@ impl SubAgent {
             session_boot_id,
             input_tx: Some(input_tx),
             task_handle: None,
+            awaiting_input: false,
         }
     }
 
@@ -861,6 +886,7 @@ impl SubAgent {
             // this in when it produces a snapshot via its own
             // `snapshot_for_listing` helper (#405).
             from_prior_session: false,
+            awaiting_input: self.awaiting_input,
         }
     }
 }
@@ -1014,6 +1040,7 @@ impl SubAgentManager {
                 session_boot_id: persisted.session_boot_id,
                 input_tx: None,
                 task_handle: None,
+                awaiting_input: false,
             };
             self.agents.insert(persisted.id, agent);
         }
@@ -1025,19 +1052,26 @@ impl SubAgentManager {
     pub fn running_count(&self) -> usize {
         self.agents
             .values()
-            .filter(|agent| {
-                // Exclude non-running statuses
-                if agent.status != SubAgentStatus::Running {
-                    return false;
-                }
-                // Exclude persisted agents with no task_handle (they're not actually running)
-                let Some(handle) = agent.task_handle.as_ref() else {
-                    return false;
-                };
-                // Exclude agents whose task has finished (status will be updated to Completed shortly)
-                !handle.is_finished()
-            })
+            .filter(|agent| agent_has_live_running_task(agent))
             .count()
+    }
+
+    /// Count running agents that should keep a parent turn alive.
+    ///
+    /// Resident game processors can be deliberately `Running` while waiting
+    /// for the first `game_agent_send`; those still count against capacity but
+    /// must not make the parent turn wait forever.
+    pub fn active_running_count(&self) -> usize {
+        self.agents
+            .values()
+            .filter(|agent| agent_has_live_running_task(agent) && !agent.awaiting_input)
+            .count()
+    }
+
+    fn has_running_assignment_role(&self, role: &str) -> bool {
+        self.agents.values().any(|agent| {
+            agent_has_live_running_task(agent) && agent.assignment.role.as_deref() == Some(role)
+        })
     }
 
     /// Spawn a new background sub-agent.
@@ -1122,6 +1156,7 @@ impl SubAgentManager {
             input_tx,
             self.current_session_boot_id.clone(),
         );
+        agent.awaiting_input = options.keep_alive_until_input;
         let agent_id = agent.id.clone();
         let started_at = agent.started_at;
         let max_steps = self.max_steps;
@@ -1142,6 +1177,7 @@ impl SubAgentManager {
             assignment,
             allowed_tools: tools,
             fork_context: options.fork_context,
+            keep_alive_until_input: options.keep_alive_until_input,
             started_at,
             max_steps,
             input_rx,
@@ -1182,6 +1218,7 @@ impl SubAgentManager {
             let mut changed = false;
             if agent.status == SubAgentStatus::Running {
                 agent.status = SubAgentStatus::Cancelled;
+                agent.awaiting_input = false;
                 release_resident_leases_for(&agent.id);
                 if let Some(handle) = agent.task_handle.take() {
                     handle.abort();
@@ -1248,6 +1285,7 @@ impl SubAgentManager {
                 assignment: agent.assignment.clone(),
                 allowed_tools: agent.allowed_tools.clone(),
                 fork_context: false,
+                keep_alive_until_input: false,
                 started_at: restarted_at,
                 max_steps: self.max_steps,
                 input_rx,
@@ -1264,6 +1302,7 @@ impl SubAgentManager {
             agent.started_at = restarted_at;
             agent.input_tx = Some(input_tx);
             agent.task_handle = Some(handle);
+            agent.awaiting_input = false;
 
             if let Some(event_tx) = runtime.event_tx {
                 let _ = event_tx.try_send(Event::AgentSpawned {
@@ -1297,6 +1336,7 @@ impl SubAgentManager {
 
         tx.send(SubAgentInput { text, interrupt })
             .map_err(|_| anyhow!("Failed to send input to agent {agent_id}"))?;
+        agent.awaiting_input = false;
 
         Ok(())
     }
@@ -1477,6 +1517,22 @@ impl SubAgentManager {
             agent.result = result.result;
             agent.steps_taken = result.steps_taken;
             agent.task_handle = None;
+            agent.awaiting_input = false;
+            changed = true;
+        }
+        if changed {
+            self.persist_state_best_effort();
+        }
+    }
+
+    fn update_running_proposal(&mut self, agent_id: &str, result: SubAgentResult) {
+        let mut changed = false;
+        if let Some(agent) = self.agents.get_mut(agent_id) {
+            agent.status = SubAgentStatus::Running;
+            agent.assignment = result.assignment;
+            agent.result = result.result;
+            agent.steps_taken = result.steps_taken;
+            agent.awaiting_input = true;
             changed = true;
         }
         if changed {
@@ -1490,6 +1546,7 @@ impl SubAgentManager {
             agent.status = SubAgentStatus::Failed(error);
             release_resident_leases_for(agent_id);
             agent.task_handle = None;
+            agent.awaiting_input = false;
             changed = true;
         }
         if changed {
@@ -1500,6 +1557,16 @@ impl SubAgentManager {
 
 /// Thread-safe wrapper for `SubAgentManager`.
 pub type SharedSubAgentManager = Arc<RwLock<SubAgentManager>>;
+
+fn agent_has_live_running_task(agent: &SubAgent) -> bool {
+    if agent.status != SubAgentStatus::Running {
+        return false;
+    }
+    let Some(handle) = agent.task_handle.as_ref() else {
+        return false;
+    };
+    !handle.is_finished()
+}
 
 fn default_state_path(workspace: &Path) -> PathBuf {
     workspace
@@ -1586,8 +1653,9 @@ impl ToolSpec for AgentSpawnTool {
             return "Spawn a game-scoped sub-agent from a declared agent pack. Pass `pack` \
                     or `role` as a generated pack role such as `dialogue_girlfriend`; the \
                     child receives only game-safe tools and returns a proposal for the main \
-                    game session to validate, narrate, and commit. Use `game_agent_wait` \
-                    or `game_agent_result` to retrieve the proposal.";
+                    game session to validate, narrate, and commit. Use one bounded \
+                    `game_agent_wait` or a non-blocking `game_agent_result` read for already \
+                    finished proposals.";
         }
         "Spawn a background sub-agent for a focused task. Returns an agent_id immediately; \
          follow with agent_result to retrieve the final result. Default cap of 10 concurrent \
@@ -1778,7 +1846,8 @@ impl ToolSpec for AgentSpawnTool {
                 &self.runtime,
                 spawn_request.assignment.role.as_deref(),
                 &spawn_request.agent_type,
-            )?,
+            )?
+            .or_else(|| (self.name == "game_agent_spawn").then(|| "deepseek-v4-flash".to_string())),
         };
 
         // Cache-aware resident mode (#529): prepend file contents to the prompt
@@ -1815,9 +1884,12 @@ impl ToolSpec for AgentSpawnTool {
                 (spawn_request.prompt, None)
             };
 
-        let route =
+        let mut route =
             resolve_subagent_assignment_route(&self.runtime, configured_model, &effective_prompt)
                 .await;
+        if self.name == "game_agent_spawn" {
+            route.reasoning_effort = Some("off".to_string());
+        }
         child_runtime.model = route.model.clone();
         child_runtime.reasoning_effort = route.reasoning_effort.clone();
         child_runtime.reasoning_effort_auto = false;
@@ -1837,6 +1909,7 @@ impl ToolSpec for AgentSpawnTool {
                     model: Some(effective_model),
                     nickname: None,
                     fork_context: spawn_request.fork_context,
+                    keep_alive_until_input: false,
                 },
             )
             .map_err(|e| ToolError::execution_failed(format!("Failed to spawn sub-agent: {e}")))?;
@@ -1914,7 +1987,11 @@ impl ToolSpec for AgentResultTool {
 
     fn description(&self) -> &'static str {
         if self.name == "game_agent_result" {
-            return "Get the latest status or final proposal for a game-scoped sub-agent. Set `block: true` to wait until the agent reaches a terminal state.";
+            return "Get the latest status or final proposal for a game-scoped sub-agent. \
+                    Prefer non-blocking reads for already finished proposals. If `block: true` \
+                    is used, the wait is capped for player responsiveness; timed-out game agents \
+                    keep running in parallel and the runtime resumes the main turn when a proposal \
+                    is ready.";
         }
         "Get the latest status or final result for a sub-agent. Set `block: true` to wait until the \
          agent reaches a terminal state (respects `timeout_ms`)."
@@ -1938,7 +2015,7 @@ impl ToolSpec for AgentResultTool {
                 },
                 "timeout_ms": {
                     "type": "integer",
-                    "description": "Max wait time in milliseconds (default: 30000, clamped to 1000-3600000)"
+                    "description": "Max wait time in milliseconds. Generic result waits default to 30000 and clamp to 1000-3600000; game result waits default to 8000 and clamp to 1-15000."
                 }
             }
         })
@@ -1955,11 +2032,22 @@ impl ToolSpec for AgentResultTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::missing_field("agent_id"))?;
         let block = optional_bool(&input, "block", false);
-        let timeout_ms = optional_u64(&input, "timeout_ms", DEFAULT_RESULT_TIMEOUT_MS)
-            .clamp(1000, MAX_RESULT_TIMEOUT_MS);
+        let is_game_result = self.name == "game_agent_result";
+        let timeout_ms = if is_game_result {
+            bounded_wait_timeout_ms(&input, true)
+        } else {
+            optional_u64(&input, "timeout_ms", DEFAULT_RESULT_TIMEOUT_MS)
+                .clamp(1000, MAX_RESULT_TIMEOUT_MS)
+        };
 
         let (result, timed_out) = if block {
-            wait_for_result(&self.manager, agent_id, Duration::from_millis(timeout_ms)).await?
+            wait_for_result(
+                &self.manager,
+                agent_id,
+                Duration::from_millis(timeout_ms),
+                is_game_result,
+            )
+            .await?
         } else {
             let manager = self.manager.read().await;
             (
@@ -1973,11 +2061,24 @@ impl ToolSpec for AgentResultTool {
         let mut tool_result =
             ToolResult::json(&result).map_err(|e| ToolError::execution_failed(e.to_string()))?;
         if timed_out {
-            tool_result.metadata = Some(json!({
+            let mut metadata = json!({
                 "status": "TimedOut",
                 "timed_out": true,
                 "timeout_ms": timeout_ms
-            }));
+            });
+            if is_game_result && let Some(object) = metadata.as_object_mut() {
+                object.insert("cancelled_on_timeout".to_string(), json!([]));
+                object.insert(
+                    "guidance".to_string(),
+                    json!(
+                        "game_agent_result timed out; the game processor is still running in parallel. Do not spawn a replacement or block again this turn; continue from the main game session unless a completion event arrives."
+                    ),
+                );
+            }
+            tool_result.metadata = Some(metadata);
+        } else if is_game_result && running_proposal_ready(&result) {
+            tool_result.metadata =
+                Some(json!({ "status": "ProposalReady", "proposal_ready": true }));
         } else if result.status == SubAgentStatus::Running {
             tool_result.metadata = Some(json!({ "status": "Running" }));
         }
@@ -2498,7 +2599,10 @@ impl ToolSpec for AgentWaitTool {
 
     fn description(&self) -> &'static str {
         if self.name == "game_agent_wait" {
-            return "Wait for one or more game-scoped sub-agents to reach a terminal status and return their proposals.";
+            return "Wait briefly for one or more game-scoped sub-agents to reach a terminal status \
+                    or resident proposal-ready state and return their proposals. Game waits are capped \
+                    for player responsiveness; on timeout, still-running waited agents keep running in \
+                    parallel and the main game session should continue without waiting again this turn.";
         }
         "Wait for one or more sub-agents to reach a terminal status. Use `wait_mode: \"all\"` to block \
          until every listed agent finishes, or `wait_mode: \"any\"` (default) to return as soon as \
@@ -2533,7 +2637,7 @@ impl ToolSpec for AgentWaitTool {
                 },
                 "timeout_ms": {
                     "type": "integer",
-                    "description": "Max wait time in milliseconds (default: 30000, clamped to 10000-3600000)"
+                    "description": "Max wait time in milliseconds. Generic waits default to 30000 and clamp to 10000-3600000; game waits default to 8000 and clamp to 1-15000."
                 }
             }
         })
@@ -2544,15 +2648,18 @@ impl ToolSpec for AgentWaitTool {
     }
 
     async fn execute(&self, input: Value, _context: &ToolContext) -> Result<ToolResult, ToolError> {
-        let timeout_ms = optional_u64(&input, "timeout_ms", DEFAULT_RESULT_TIMEOUT_MS)
-            .clamp(MIN_WAIT_TIMEOUT_MS, MAX_RESULT_TIMEOUT_MS);
+        let is_game_wait = self.name == "game_agent_wait";
+        let timeout_ms = bounded_wait_timeout_ms(&input, is_game_wait);
         let mut ids = parse_wait_ids(&input);
         if ids.is_empty() {
             let manager = self.manager.read().await;
             ids = manager
                 .list()
                 .into_iter()
-                .filter(|snapshot| snapshot.status == SubAgentStatus::Running)
+                .filter(|snapshot| {
+                    snapshot.status == SubAgentStatus::Running
+                        && !(self.name == "game_agent_wait" && snapshot.awaiting_input)
+                })
                 .map(|snapshot| snapshot.agent_id)
                 .collect();
         }
@@ -2582,20 +2689,21 @@ impl ToolSpec for AgentWaitTool {
             &ids,
             wait_mode,
             Duration::from_millis(timeout_ms),
+            is_game_wait,
         )
         .await?;
 
         let all_done = snapshots
             .iter()
-            .all(|snapshot| snapshot.status != SubAgentStatus::Running);
+            .all(|snapshot| wait_satisfied(snapshot, is_game_wait));
         let completed_ids = snapshots
             .iter()
-            .filter(|snapshot| snapshot.status != SubAgentStatus::Running)
+            .filter(|snapshot| wait_satisfied(snapshot, is_game_wait))
             .map(|snapshot| snapshot.agent_id.clone())
             .collect::<Vec<_>>();
         let running_ids = snapshots
             .iter()
-            .filter(|snapshot| snapshot.status == SubAgentStatus::Running)
+            .filter(|snapshot| !wait_satisfied(snapshot, is_game_wait))
             .map(|snapshot| snapshot.agent_id.clone())
             .collect::<Vec<_>>();
         let status_by_id = snapshots
@@ -2618,7 +2726,13 @@ impl ToolSpec for AgentWaitTool {
             "waited_ids": waited_ids,
             "completed_ids": completed_ids,
             "running_ids": running_ids,
-            "status_by_id": status_by_id
+            "cancelled_on_timeout": [],
+            "status_by_id": status_by_id,
+            "guidance": if is_game_wait && timed_out {
+                "game_agent_wait timed out; waited game processors are still running in parallel. Do not spawn replacements or wait again this turn; continue from the main game session unless a completion event arrives."
+            } else {
+                ""
+            }
         }));
         Ok(result)
     }
@@ -2840,6 +2954,7 @@ struct SubAgentTask {
     /// Approval-gated tools still require an auto-approved parent runtime.
     allowed_tools: Option<Vec<String>>,
     fork_context: bool,
+    keep_alive_until_input: bool,
     started_at: Instant,
     max_steps: u32,
     input_rx: mpsc::UnboundedReceiver<SubAgentInput>,
@@ -2855,6 +2970,7 @@ async fn run_subagent_task(task: SubAgentTask) {
         task.assignment,
         task.allowed_tools,
         task.fork_context,
+        task.keep_alive_until_input,
         task.started_at,
         task.max_steps,
         task.input_rx,
@@ -2938,6 +3054,46 @@ pub(crate) fn emit_parent_completion(
     true
 }
 
+async fn publish_running_proposal(
+    runtime: &SubAgentRuntime,
+    agent_id: &str,
+    agent_type: &SubAgentType,
+    assignment: &SubAgentAssignment,
+    result: Option<String>,
+    steps_taken: u32,
+    started_at: Instant,
+) {
+    let proposal = SubAgentResult {
+        agent_id: agent_id.to_string(),
+        agent_type: agent_type.clone(),
+        assignment: assignment.clone(),
+        model: runtime.model.clone(),
+        nickname: None,
+        status: SubAgentStatus::Running,
+        result,
+        steps_taken,
+        duration_ms: u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
+        from_prior_session: false,
+        awaiting_input: true,
+    };
+
+    {
+        let mut manager = runtime.manager.write().await;
+        manager.update_running_proposal(agent_id, proposal.clone());
+    }
+
+    let summary = summarize_subagent_result(&proposal);
+    let sentinel = subagent_done_sentinel(agent_id, &proposal);
+    let payload = format!("{summary}\n{sentinel}");
+    emit_parent_completion(runtime, agent_id, &payload);
+    emit_agent_progress(
+        runtime.event_tx.as_ref(),
+        runtime.mailbox.as_ref(),
+        agent_id,
+        "proposal ready; waiting for next assignment".to_string(),
+    );
+}
+
 /// Build a `<deepseek:subagent.done>` JSON sentinel for a successful child.
 /// Intended to surface in the parent's transcript so the model recognizes
 /// child completion and can decide whether to read the full result via
@@ -2973,6 +3129,7 @@ async fn run_subagent(
     assignment: SubAgentAssignment,
     allowed_tools: Option<Vec<String>>,
     fork_context: bool,
+    keep_alive_until_input: bool,
     started_at: Instant,
     max_steps: u32,
     mut input_rx: mpsc::UnboundedReceiver<SubAgentInput>,
@@ -3016,8 +3173,12 @@ async fn run_subagent(
     let mut steps = 0;
     let mut final_result: Option<String> = None;
     let mut pending_inputs: VecDeque<SubAgentInput> = VecDeque::new();
+    let mut received_external_input = false;
 
-    for _step in 0..max_steps {
+    loop {
+        if steps >= max_steps {
+            break;
+        }
         // Cooperative cancellation: bail if the parent (or root) cancelled
         // us while we were between steps. Children derive their token from
         // the parent's via `child_token()` so this propagates the whole tree.
@@ -3044,6 +3205,7 @@ async fn run_subagent(
                 steps_taken: steps,
                 duration_ms: u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
                 from_prior_session: false,
+                awaiting_input: false,
             });
         }
 
@@ -3056,6 +3218,7 @@ async fn run_subagent(
         );
 
         while let Ok(input) = input_rx.try_recv() {
+            received_external_input = true;
             if input.interrupt {
                 pending_inputs.clear();
             }
@@ -3118,6 +3281,7 @@ async fn run_subagent(
                     duration_ms: u64::try_from(started_at.elapsed().as_millis())
                         .unwrap_or(u64::MAX),
                     from_prior_session: false,
+                    awaiting_input: false,
                 });
             }
             api = tokio::time::timeout(STEP_API_TIMEOUT, runtime.client.create_message(request)) => {
@@ -3157,12 +3321,72 @@ async fn run_subagent(
 
         if tool_uses.is_empty() {
             while let Ok(input) = input_rx.try_recv() {
+                received_external_input = true;
                 if input.interrupt {
                     pending_inputs.clear();
                 }
                 pending_inputs.push_back(input);
             }
             if pending_inputs.is_empty() {
+                if keep_alive_until_input {
+                    if received_external_input {
+                        publish_running_proposal(
+                            runtime,
+                            &agent_id,
+                            &agent_type,
+                            &assignment,
+                            final_result.clone(),
+                            steps,
+                            started_at,
+                        )
+                        .await;
+                        final_result = None;
+                    }
+                    steps = 0;
+                    emit_agent_progress(
+                        runtime.event_tx.as_ref(),
+                        runtime.mailbox.as_ref(),
+                        &agent_id,
+                        format!("step {steps}/{max_steps}: idle, waiting for assignment"),
+                    );
+                    let input = tokio::select! {
+                        biased;
+                        () = runtime.cancel_token.cancelled() => {
+                            emit_agent_progress(
+                                runtime.event_tx.as_ref(),
+                                runtime.mailbox.as_ref(),
+                                &agent_id,
+                                format!("step {steps}/{max_steps}: cancelled while idle"),
+                            );
+                            if let Some(mb) = runtime.mailbox.as_ref() {
+                                let _ = mb.send(MailboxMessage::Cancelled {
+                                    agent_id: agent_id.clone(),
+                                });
+                            }
+                            return Ok(SubAgentResult {
+                                agent_id: agent_id.clone(),
+                                agent_type: agent_type.clone(),
+                                assignment: assignment.clone(),
+                                model: runtime.model.clone(),
+                                nickname: None,
+                                status: SubAgentStatus::Cancelled,
+                                result: None,
+                                steps_taken: steps,
+                                duration_ms: u64::try_from(started_at.elapsed().as_millis())
+                                    .unwrap_or(u64::MAX),
+                                from_prior_session: false,
+                                awaiting_input: false,
+                            });
+                        }
+                        input = input_rx.recv() => input,
+                    };
+                    let Some(input) = input else {
+                        break;
+                    };
+                    received_external_input = true;
+                    pending_inputs.push_back(input);
+                    continue;
+                }
                 emit_agent_progress(
                     runtime.event_tx.as_ref(),
                     runtime.mailbox.as_ref(),
@@ -3254,6 +3478,7 @@ async fn run_subagent(
         steps_taken: steps,
         duration_ms: u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
         from_prior_session: false,
+        awaiting_input: false,
     })
 }
 
@@ -3261,6 +3486,7 @@ async fn wait_for_result(
     manager: &SharedSubAgentManager,
     agent_id: &str,
     timeout: Duration,
+    accept_running_proposal: bool,
 ) -> Result<(SubAgentResult, bool), ToolError> {
     let deadline = Instant::now() + timeout;
 
@@ -3272,7 +3498,7 @@ async fn wait_for_result(
                 .map_err(|e| ToolError::execution_failed(e.to_string()))?
         };
 
-        if snapshot.status != SubAgentStatus::Running {
+        if wait_satisfied(&snapshot, accept_running_proposal) {
             return Ok((snapshot, false));
         }
         if Instant::now() >= deadline {
@@ -3288,6 +3514,7 @@ async fn wait_for_agents(
     ids: &[String],
     wait_mode: WaitMode,
     timeout: Duration,
+    accept_running_proposals: bool,
 ) -> Result<(Vec<SubAgentResult>, bool), ToolError> {
     let deadline = Instant::now() + timeout;
 
@@ -3303,7 +3530,7 @@ async fn wait_for_agents(
                 .collect::<Result<Vec<_>, _>>()?
         };
 
-        if wait_mode.condition_met(&snapshots) {
+        if wait_mode.condition_met(&snapshots, accept_running_proposals) {
             return Ok((snapshots, false));
         }
         if Instant::now() >= deadline {
@@ -3312,6 +3539,23 @@ async fn wait_for_agents(
 
         tokio::time::sleep(RESULT_POLL_INTERVAL).await;
     }
+}
+
+fn bounded_wait_timeout_ms(input: &Value, is_game_wait: bool) -> u64 {
+    let (default, min, max) = if is_game_wait {
+        (
+            GAME_WAIT_DEFAULT_TIMEOUT_MS,
+            GAME_WAIT_MIN_TIMEOUT_MS,
+            GAME_WAIT_MAX_TIMEOUT_MS,
+        )
+    } else {
+        (
+            DEFAULT_RESULT_TIMEOUT_MS,
+            MIN_WAIT_TIMEOUT_MS,
+            MAX_RESULT_TIMEOUT_MS,
+        )
+    };
+    optional_u64(input, "timeout_ms", default).clamp(min, max)
 }
 
 fn parse_wait_mode(input: &Value) -> Result<WaitMode, ToolError> {
@@ -4253,6 +4497,57 @@ fn game_scoped_prompt(
     )
 }
 
+pub(crate) async fn prewarm_game_subagents(
+    manager: SharedSubAgentManager,
+    runtime: SubAgentRuntime,
+    session: &crate::game::LoadedGameSession,
+) -> Result<Vec<SubAgentResult>> {
+    let packs = session.agent_packs()?;
+    let mut spawned = Vec::new();
+    let mut manager_guard = manager.write().await;
+
+    for pack in packs {
+        if manager_guard.running_count() >= manager_guard.max_agents {
+            break;
+        }
+        if manager_guard.has_running_assignment_role(&pack.role) {
+            continue;
+        }
+
+        let role = pack.role.clone();
+        let prompt = game_scoped_prompt(Some(&pack), &game_prewarm_task(&role));
+        let assignment = SubAgentAssignment::new(prompt.clone(), Some(role));
+        let mut child_runtime = runtime.background_runtime();
+        child_runtime.model = "deepseek-v4-flash".to_string();
+        child_runtime.reasoning_effort = Some("off".to_string());
+        child_runtime.reasoning_effort_auto = false;
+
+        let result = manager_guard.spawn_background_with_assignment_options(
+            Arc::clone(&manager),
+            child_runtime,
+            SubAgentType::General,
+            prompt,
+            assignment,
+            Some(game_safe_subagent_tools()),
+            SubAgentSpawnOptions {
+                model: Some("deepseek-v4-flash".to_string()),
+                nickname: None,
+                fork_context: false,
+                keep_alive_until_input: true,
+            },
+        )?;
+        spawned.push(result);
+    }
+
+    Ok(spawned)
+}
+
+fn game_prewarm_task(role: &str) -> String {
+    format!(
+        "Prewarm the `{role}` game processor for the current scene. Read the scoped pack context and load only the assigned skills needed to answer a future player-action assignment quickly. No player action has been sent yet, so do not propose dialogue, narration, state changes, scores, or route decisions. Return a minimal READY handoff in the mandatory sub-agent output format, then wait for the next game_agent_send assignment."
+    )
+}
+
 fn format_path_lines(paths: &[PathBuf]) -> String {
     if paths.is_empty() {
         return "- none".to_string();
@@ -4292,6 +4587,9 @@ fn game_safe_subagent_tools() -> Vec<String> {
 fn summarize_subagent_result(result: &SubAgentResult) -> String {
     match (&result.status, result.result.as_ref()) {
         (SubAgentStatus::Completed, Some(text)) => {
+            truncate_preview(extract_subagent_summary(text).unwrap_or(text))
+        }
+        (SubAgentStatus::Running, Some(text)) if result.awaiting_input => {
             truncate_preview(extract_subagent_summary(text).unwrap_or(text))
         }
         (SubAgentStatus::Completed, None) => "Completed (no output)".to_string(),

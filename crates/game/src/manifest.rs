@@ -49,12 +49,15 @@ impl Default for ContentSection {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SavesSection {
     pub root: PathBuf,
+    #[serde(default)]
+    pub template_root: Option<PathBuf>,
 }
 
 impl Default for SavesSection {
     fn default() -> Self {
         Self {
             root: PathBuf::from("saves"),
+            template_root: None,
         }
     }
 }
@@ -66,6 +69,7 @@ pub struct LoadedGame {
     pub content_roots: Vec<PathBuf>,
     pub content_index: Option<PathBuf>,
     pub saves_root: PathBuf,
+    pub save_templates_root: Option<PathBuf>,
     pub warnings: Vec<String>,
 }
 
@@ -127,6 +131,21 @@ pub fn load_game(root: impl AsRef<Path>) -> Result<LoadedGame> {
             manifest.saves.root.display()
         ));
     }
+    let save_templates_root = manifest
+        .saves
+        .template_root
+        .as_ref()
+        .map(|path| {
+            let resolved = paths::resolve_under(&root, path, "save template root")?;
+            if !resolved.exists() {
+                warnings.push(format!(
+                    "save template root does not exist: {}",
+                    path.display()
+                ));
+            }
+            Ok(resolved)
+        })
+        .transpose()?;
 
     Ok(LoadedGame {
         root,
@@ -134,6 +153,7 @@ pub fn load_game(root: impl AsRef<Path>) -> Result<LoadedGame> {
         content_roots,
         content_index,
         saves_root,
+        save_templates_root,
         warnings,
     })
 }
@@ -157,6 +177,9 @@ pub fn validate_game_manifest(manifest: &GameManifest) -> Result<()> {
         ));
     }
     paths::normalize_relative(&manifest.saves.root, "saves root")?;
+    if let Some(template_root) = &manifest.saves.template_root {
+        paths::normalize_relative(template_root, "save template root")?;
+    }
     for root in &manifest.content.roots {
         paths::normalize_relative(root, "content root")?;
     }

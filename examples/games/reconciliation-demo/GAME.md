@@ -38,10 +38,16 @@ launches prompt before the TUI starts when no language is supplied. Use
 `/skill rule-repeat` or `/game rules` to show the how-to-play guide again during
 play.
 
-The save starts with a small plot frame: premise, background, opening conflict,
-cast, and the live exchange with 绫波丽 (Ayanami Rei). It also tracks progress as a story graph
-with an emotional reconciliation style profile. `story.branches.mainline.head`
-points at the active beat, and `TURN_LOG.jsonl` records committed turns.
+The save template starts with a small plot frame: premise, background, opening
+conflict, cast, and the live exchange with 绫波丽 (Ayanami Rei). It also tracks
+progress as a story graph with an emotional reconciliation style profile.
+`story.branches.mainline.head` points at the active beat, and each live save's
+`TURN_LOG.jsonl` records committed turns.
+
+The Scene/场景 panel is backed by terminal art in
+`assets/scenes/station-overpass/`. The opening, confrontation, embrace,
+argument, emotional-distance, and separation frames are selected through
+`ui.scene_art.active` and each story node's `scene_art` key.
 
 `content/backstory.md` contains the full demo background: how the player and
 绫波丽 (Ayanami Rei) became close in Tokyo, the private promise they made, the joke and weeks
@@ -53,7 +59,7 @@ allowed inside their action skills, but new biology, identity, family, legal,
 location, or backstory facts must pass `game_fact_check` before they can enter
 narration or committed state.
 
-The default save includes `AGENTS.json` with three restartable processors:
+The default save template includes `AGENTS.json` with three restartable processors:
 `state`, `plot`, and `dialogue_girlfriend`. The `dialogue` driver role expands
 to the active NPC, so 绫波丽 (Ayanami Rei) is handled by her own scoped pack with
 `skills/npc/girlfriend/SKILL.md`, scene details, backstory, and current save

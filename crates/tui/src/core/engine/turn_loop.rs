@@ -828,6 +828,11 @@ impl Engine {
                     continue;
                 }
 
+                let player_game_profile = self
+                    .config
+                    .game_session
+                    .as_ref()
+                    .is_some_and(|session| !session.developer_mode());
                 // Sub-agent completion handoff (issue #756). The model finished
                 // streaming with no tool calls — but if it has direct children
                 // still running (or completions queued from children that
@@ -843,7 +848,7 @@ impl Engine {
                 if completions.is_empty() {
                     let running = {
                         let mgr = self.subagent_manager.read().await;
-                        mgr.running_count()
+                        mgr.active_running_count()
                     };
                     if running > 0 {
                         let _ = self
@@ -896,8 +901,11 @@ impl Engine {
                 if !completions.is_empty() {
                     let count = completions.len();
                     for c in completions {
-                        self.add_session_message(subagent_completion_runtime_message(&c.payload))
-                            .await;
+                        self.add_session_message(subagent_completion_runtime_message(
+                            &c.payload,
+                            player_game_profile,
+                        ))
+                        .await;
                     }
                     let _ = self
                         .tx_event
@@ -1801,7 +1809,12 @@ impl Engine {
     }
 }
 
-fn subagent_completion_runtime_message(payload: &str) -> Message {
+fn subagent_completion_runtime_message(payload: &str, player_game_profile: bool) -> Message {
+    let game_guidance = if player_game_profile {
+        "\n\nGame Console follow-up: this completion is a proposal for the current player action. Use it now; call `game_agent_result` only if the completion summary is insufficient, then continue automatically to `game_commit_turn` in the same player turn. Do not ask the player for another input before resolving and committing this action."
+    } else {
+        ""
+    };
     Message {
         role: "system".to_string(),
         content: vec![ContentBlock::Text {
@@ -1810,7 +1823,7 @@ fn subagent_completion_runtime_message(payload: &str) -> Message {
 This is an internal runtime event, not user input. Use the sub-agent completion \
 data below to continue coordinating the current task. Do not tell the user they \
 pasted sentinels, do not explain the sentinel protocol, and do not quote the raw \
-XML unless the user explicitly asks to debug sub-agent internals.\n\n\
+XML unless the user explicitly asks to debug sub-agent internals.{game_guidance}\n\n\
 {payload}\n\
 </deepseek:runtime_event>"
             ),
@@ -1881,6 +1894,7 @@ mod tests {
     fn subagent_completion_handoff_is_internal_system_message() {
         let message = subagent_completion_runtime_message(
             "Build passed\n<deepseek:subagent.done>{\"agent_id\":\"agent_a\"}</deepseek:subagent.done>",
+            false,
         );
 
         assert_eq!(message.role, "system");
@@ -1892,6 +1906,25 @@ mod tests {
         assert!(text.contains("Do not tell the user they pasted sentinels"));
         assert!(text.contains("<deepseek:subagent.done>"));
         assert!(text.contains("Build passed"));
+    }
+
+    #[test]
+    fn game_subagent_completion_handoff_instructs_commit_continuation() {
+        let message = subagent_completion_runtime_message(
+            "NPC proposal ready\n<deepseek:subagent.done>{\"agent_id\":\"agent_game\"}</deepseek:subagent.done>",
+            true,
+        );
+
+        assert_eq!(message.role, "system");
+        let text = match &message.content[0] {
+            ContentBlock::Text { text, .. } => text,
+            other => panic!("expected text block, got {other:?}"),
+        };
+        assert!(text.contains("Game Console follow-up"));
+        assert!(text.contains("game_agent_result"));
+        assert!(text.contains("game_commit_turn"));
+        assert!(text.contains("Do not ask the player for another input"));
+        assert!(text.contains("NPC proposal ready"));
     }
 
     #[test]

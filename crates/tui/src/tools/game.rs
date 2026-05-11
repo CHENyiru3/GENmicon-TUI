@@ -745,6 +745,9 @@ fn normalize_game_state_patch(
                 "flags": outcome.flags
             },
             "ui": {
+                "scene_art": {
+                    "active": outcome.scene_art
+                },
                 "reactions": {
                     "active": outcome.reaction
                 }
@@ -775,6 +778,7 @@ fn normalize_game_state_patch(
 struct ReconciliationOutcome {
     branch: &'static str,
     node: &'static str,
+    scene_art: &'static str,
     reaction: &'static str,
     relationship_delta: i64,
     relationship_score: Option<i64>,
@@ -856,6 +860,11 @@ fn infer_reconciliation_outcome(
         return ReconciliationOutcome {
             branch: "pressure_failure",
             node: "pressure_failure",
+            scene_art: if hostile && !pressure {
+                "separation"
+            } else {
+                "argument"
+            },
             reaction: if violent { "disgusted" } else { "angry" },
             relationship_delta: if violent { -100 } else { -3 },
             relationship_score: violent.then_some(-100),
@@ -872,6 +881,7 @@ fn infer_reconciliation_outcome(
         return ReconciliationOutcome {
             branch: "honest_admission",
             node: "honest_admission",
+            scene_art: "confrontation",
             reaction: "flustered",
             relationship_delta: 1,
             relationship_score: None,
@@ -885,6 +895,7 @@ fn infer_reconciliation_outcome(
     ReconciliationOutcome {
         branch: "mainline",
         node: "opening_apology",
+        scene_art: "opening",
         reaction: "worried",
         relationship_delta: 0,
         relationship_score: None,
@@ -1223,15 +1234,15 @@ mod tests {
     async fn game_lookup_accepts_state_key_alias() {
         let context = context_for_example("reconciliation-demo");
         let result = GameLookupTool
-            .execute(json!({"key": "world.flags"}), &context)
+            .execute(json!({"key": "driver.id"}), &context)
             .await
             .expect("state lookup should succeed");
         let content: Value = serde_json::from_str(&result.content).expect("json result");
 
         assert_eq!(content["kind"], "state");
-        assert_eq!(content["path"], "world.flags");
+        assert_eq!(content["path"], "driver.id");
         assert_eq!(content["found"], true);
-        assert_eq!(content["value"], json!({}));
+        assert_eq!(content["value"], json!("galgame"));
     }
 
     #[tokio::test]
@@ -1404,6 +1415,10 @@ mod tests {
         assert_eq!(
             patch.pointer("/ui/reactions/active"),
             Some(&json!("disgusted"))
+        );
+        assert_eq!(
+            patch.pointer("/ui/scene_art/active"),
+            Some(&json!("argument"))
         );
         assert_eq!(
             patch.pointer("/player/stats/relationship_score"),

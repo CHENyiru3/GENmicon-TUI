@@ -24,6 +24,12 @@ pub struct GameConsoleWidget<'a> {
     background: Color,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GameConsoleScrollBounds {
+    pub dialogue_max_scroll: usize,
+    pub progress_max_scroll: usize,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct StyledArtCell {
     symbol: char,
@@ -300,16 +306,155 @@ impl<'a> GameConsoleWidget<'a> {
     }
 
     fn render_scene_panel(&self, session: &LoadedGameSession, area: Rect, buf: &mut Buffer) {
-        render_text_panel(
-            panel_label(session, "Scene", "场景"),
-            &scene_lines(session),
-            self.console.progress_scroll,
-            self.console.focus == GameConsoleFocus::Progress,
-            area,
-            buf,
-            self.background,
-        );
+        let loaded_source = session
+            .view
+            .scene_art_source
+            .as_ref()
+            .and_then(|source| load_ascii_art_source(&session.game_root, source));
+        let embedded_art = session
+            .view
+            .scene_art
+            .as_ref()
+            .map(renderable_from_plain_frame);
+        if loaded_source.is_some() || embedded_art.is_some() {
+            render_art_or_text_panel(
+                panel_label(session, "Scene", "场景"),
+                loaded_source.as_ref().or(embedded_art.as_ref()),
+                &scene_lines(session).join("\n"),
+                area,
+                buf,
+                self.background,
+            );
+        } else {
+            render_text_panel(
+                panel_label(session, "Scene", "场景"),
+                &scene_lines(session),
+                self.console.progress_scroll,
+                self.console.focus == GameConsoleFocus::Progress,
+                area,
+                buf,
+                self.background,
+            );
+        }
     }
+}
+
+pub fn game_console_scroll_bounds(app: &App, area: Rect) -> GameConsoleScrollBounds {
+    let Some(GameSession::Loaded(session)) = app.game_session.as_ref() else {
+        return GameConsoleScrollBounds::default();
+    };
+    let player_log = player_log(app);
+    scroll_bounds_for_loaded(session, &player_log, area)
+}
+
+fn scroll_bounds_for_loaded(
+    session: &LoadedGameSession,
+    player_log: &[String],
+    area: Rect,
+) -> GameConsoleScrollBounds {
+    if area.width < 20 || area.height < 8 {
+        return GameConsoleScrollBounds::default();
+    }
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .split(area);
+    let area = chunks[1];
+    if area.width >= 120 {
+        scroll_bounds_wide(session, player_log, area)
+    } else if area.width >= 80 {
+        scroll_bounds_medium(session, player_log, area)
+    } else {
+        scroll_bounds_narrow(session, player_log, area)
+    }
+}
+
+fn scroll_bounds_wide(
+    session: &LoadedGameSession,
+    player_log: &[String],
+    area: Rect,
+) -> GameConsoleScrollBounds {
+    let bottom_height = area.height.saturating_mul(38).saturating_div(100).max(8);
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(8), Constraint::Length(bottom_height)])
+        .split(area);
+    let top = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
+        .split(rows[0]);
+    let bottom = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
+        .split(rows[1]);
+    GameConsoleScrollBounds {
+        dialogue_max_scroll: max_scroll_for_lines(&dialogue_lines(session, player_log), bottom[0]),
+        progress_max_scroll: scene_max_scroll(session, top[0]),
+    }
+}
+
+fn scroll_bounds_medium(
+    session: &LoadedGameSession,
+    player_log: &[String],
+    area: Rect,
+) -> GameConsoleScrollBounds {
+    let hero_height = area.height.saturating_mul(46).saturating_div(100).max(10);
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(hero_height), Constraint::Min(8)])
+        .split(area);
+    let hero = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(56), Constraint::Percentage(44)])
+        .split(rows[0]);
+    let bottom = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
+        .split(rows[1]);
+    GameConsoleScrollBounds {
+        dialogue_max_scroll: max_scroll_for_lines(&dialogue_lines(session, player_log), bottom[0]),
+        progress_max_scroll: scene_max_scroll(session, hero[0]),
+    }
+}
+
+fn scroll_bounds_narrow(
+    session: &LoadedGameSession,
+    player_log: &[String],
+    area: Rect,
+) -> GameConsoleScrollBounds {
+    let scene_height = area.height.saturating_mul(22).saturating_div(100).max(4);
+    let figure_height = area.height.saturating_mul(30).saturating_div(100).max(5);
+    let info_height = area.height.saturating_mul(18).saturating_div(100).max(4);
+    let choice_height = area.height.saturating_mul(16).saturating_div(100).max(3);
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(scene_height),
+            Constraint::Length(figure_height),
+            Constraint::Length(info_height),
+            Constraint::Min(5),
+            Constraint::Length(choice_height),
+        ])
+        .split(area);
+    GameConsoleScrollBounds {
+        dialogue_max_scroll: max_scroll_for_lines(&dialogue_lines(session, player_log), rows[3]),
+        progress_max_scroll: scene_max_scroll(session, rows[0]),
+    }
+}
+
+fn scene_max_scroll(session: &LoadedGameSession, area: Rect) -> usize {
+    if session.view.scene_art_source.is_some() || session.view.scene_art.is_some() {
+        0
+    } else {
+        max_scroll_for_lines(&scene_lines(session), area)
+    }
+}
+
+fn max_scroll_for_lines(lines: &[String], area: Rect) -> usize {
+    let inner = panel_inner(area);
+    let total_visual_lines = visual_line_count(lines, inner.width);
+    total_visual_lines.saturating_sub(usize::from(inner.height))
 }
 
 fn render_game_header(
@@ -448,7 +593,7 @@ fn render_text_panel(
     background: Color,
 ) {
     let block = panel_block(title, background, focused);
-    let inner = block.inner(area);
+    let inner = panel_inner(area);
     block.render(area, buf);
     render_lines(lines.to_vec(), scroll, inner, buf, background);
 }
@@ -460,14 +605,7 @@ fn render_lines(
     buf: &mut Buffer,
     background: Color,
 ) {
-    let total_visual_lines = if lines.is_empty() {
-        1
-    } else {
-        lines
-            .iter()
-            .map(|line| wrapped_line_count(line, area.width))
-            .sum()
-    };
+    let total_visual_lines = visual_line_count(&lines, area.width);
     let content = if lines.is_empty() {
         vec![Line::from(Span::styled(
             "No visible information yet.",
@@ -491,6 +629,21 @@ fn render_lines(
         .scroll((scroll.min(usize::from(u16::MAX)) as u16, 0))
         .style(Style::default().bg(background))
         .render(area, buf);
+}
+
+fn panel_inner(area: Rect) -> Rect {
+    Block::default().borders(Borders::ALL).inner(area)
+}
+
+fn visual_line_count(lines: &[String], width: u16) -> usize {
+    if lines.is_empty() {
+        1
+    } else {
+        lines
+            .iter()
+            .map(|line| wrapped_line_count(line, width))
+            .sum()
+    }
 }
 
 fn wrapped_line_count(line: &str, width: u16) -> usize {
@@ -1156,7 +1309,7 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    use deepseek_game::render::{GameViewSnapshot, RenderPanel};
+    use deepseek_game::render::{AsciiArtFrame, GameViewSnapshot, RenderPanel};
     use ratatui::buffer::Buffer;
 
     use super::*;
@@ -1187,6 +1340,7 @@ mod tests {
                 choices: vec!["1. Ask".to_string()],
                 validation: "valid".to_string(),
                 scene_art: None,
+                scene_art_source: None,
                 figure_art: None,
                 figure_art_source: None,
                 figure_emotion: Some("neutral".to_string()),
@@ -1262,6 +1416,21 @@ mod tests {
     }
 
     #[test]
+    fn scroll_bounds_report_overflowing_dialogue_panel() {
+        let session = loaded_session();
+        let player_log = (0..40)
+            .map(|index| format!("Game: archived line {index}"))
+            .collect::<Vec<_>>();
+
+        let bounds = scroll_bounds_for_loaded(&session, &player_log, Rect::new(0, 0, 140, 32));
+
+        assert!(
+            bounds.dialogue_max_scroll > 0,
+            "long dialogue history should be scrollable: {bounds:?}"
+        );
+    }
+
+    #[test]
     fn game_console_renders_representative_terminal_sizes() {
         let session = GameSession::Loaded(loaded_session());
         for (width, height) in [(60, 20), (90, 28), (140, 40)] {
@@ -1299,6 +1468,37 @@ mod tests {
 
         assert_eq!(scaled.len(), 11);
         assert!(scaled.iter().all(|line| line.len() <= 37));
+    }
+
+    #[test]
+    fn game_console_renders_scene_art_in_scene_panel() {
+        let mut loaded = loaded_session();
+        loaded.view.scene_art = Some(AsciiArtFrame {
+            cols: 80,
+            rows: 20,
+            lines: (0..20).map(|_| "@".repeat(80)).collect(),
+            ratio_cols: 4,
+            ratio_rows: 1,
+        });
+        let session = GameSession::Loaded(loaded);
+        let widget = GameConsoleWidget::from_parts(Some(&session), Vec::new());
+        let area = Rect::new(0, 0, 140, 40);
+        let mut buf = Buffer::empty(area);
+
+        widget.render(area, &mut buf);
+
+        let mut visible_art_cells = 0usize;
+        for y in 0..area.height {
+            for x in 0..area.width {
+                if buf[(x, y)].symbol() == "@" {
+                    visible_art_cells += 1;
+                }
+            }
+        }
+        assert!(
+            visible_art_cells > 500,
+            "scene panel should render visible art, got {visible_art_cells} cells"
+        );
     }
 
     #[test]

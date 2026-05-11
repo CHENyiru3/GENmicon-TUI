@@ -36,12 +36,27 @@ sub-agent transcripts, are the reload source of truth. Player mode must give
 game sub-agents scoped context and game-safe tools only; developer mode can
 surface raw summaries and roster details for debugging.
 
+In player mode, the engine prewarms declared game packs as soon as the Game
+Console opens. These processors run on `deepseek-v4-flash` with thinking
+disabled, return a minimal ready handoff, and remain idle until the main game
+session sends the current player action with `game_agent_send`. This keeps the
+first NPC response from paying the full spawn and context-loading cost.
+
 The model-visible game helpers are `game_agent_spawn`, `game_agent_wait`,
 `game_agent_result`, `game_agent_send`, `game_agent_resume`,
 `game_agent_assign`, `game_agent_cancel`, and `game_agent_list`. Player mode
 must not expose the generic coding-agent `agent_spawn` surface for game
 orchestration. `game_agent_spawn` requires a declared generated pack such as
 `dialogue_girlfriend` when the active game declares packs.
+`game_agent_wait` is intentionally bounded for player responsiveness: it
+defaults to an 8s wait, clamps requested waits to 15s, and leaves waited game
+agents running in parallel when the wait times out. The main game session
+should continue from its own rules and any completed proposals rather than
+repeatedly waiting on a slow processor; the runtime will resume the main turn
+if that processor later publishes a proposal. `game_agent_result` is intended
+for non-blocking reads of already finished proposals; if called with
+`block=true`, it uses the same short game timeout and preserves still-running
+processors.
 
 ## Role taxonomy
 

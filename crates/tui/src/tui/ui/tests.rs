@@ -679,6 +679,16 @@ fn create_test_app() -> App {
     App::new(options, &Config::default())
 }
 
+fn attach_player_game_session(app: &mut App) {
+    app.game_session = Some(crate::game::GameSession::Notice(
+        crate::game::GameSessionNotice {
+            message: "loaded".to_string(),
+            developer_mode: false,
+            language: crate::game::GameLanguage::English,
+        },
+    ));
+}
+
 fn text_message(role: &str, text: &str) -> Message {
     Message {
         role: role.to_string(),
@@ -1123,6 +1133,41 @@ fn turn_liveness_reconciles_completed_busy_state() {
 }
 
 #[test]
+fn turn_liveness_recovers_stale_game_console_loading_state() {
+    let mut app = create_test_app();
+    attach_player_game_session(&mut app);
+    app.is_loading = true;
+    app.dispatch_started_at = None;
+    app.turn_started_at = None;
+    app.runtime_turn_status = None;
+    app.streaming_message_index = None;
+
+    let recovered = reconcile_turn_liveness(&mut app, Instant::now(), false);
+
+    assert!(recovered);
+    assert!(!app.is_loading);
+    let toast = app.status_toasts.back().expect("game recovery toast");
+    assert_eq!(toast.level, StatusToastLevel::Warning);
+    assert!(toast.text.contains("Recovered Game Console input state"));
+    assert!(game_player_can_dispatch_queued_action(&app));
+}
+
+#[test]
+fn game_player_queued_action_dispatch_gate_respects_active_turn() {
+    let mut app = create_test_app();
+    attach_player_game_session(&mut app);
+    app.is_loading = false;
+    assert!(game_player_can_dispatch_queued_action(&app));
+
+    app.runtime_turn_status = Some("in_progress".to_string());
+    assert!(!game_player_can_dispatch_queued_action(&app));
+
+    app.runtime_turn_status = None;
+    app.dispatch_started_at = Some(Instant::now());
+    assert!(!game_player_can_dispatch_queued_action(&app));
+}
+
+#[test]
 fn turn_liveness_leaves_active_turn_running() {
     let mut app = create_test_app();
     app.is_loading = true;
@@ -1251,6 +1296,7 @@ fn make_subagent(
         steps_taken: 0,
         duration_ms: 0,
         from_prior_session: false,
+        awaiting_input: false,
     }
 }
 
@@ -1283,6 +1329,33 @@ fn running_agent_count_unions_cache_and_progress() {
         .insert("agent_c".to_string(), "planning".to_string());
 
     assert_eq!(running_agent_count(&app), 2);
+}
+
+#[test]
+fn running_agent_count_ignores_prewarmed_agents_awaiting_input() {
+    let mut app = create_test_app();
+    let mut awaiting = make_subagent(
+        "agent_waiting",
+        crate::tools::subagent::SubAgentStatus::Running,
+    );
+    awaiting.awaiting_input = true;
+    app.subagent_cache = vec![
+        awaiting,
+        make_subagent(
+            "agent_active",
+            crate::tools::subagent::SubAgentStatus::Running,
+        ),
+    ];
+    app.agent_progress.insert(
+        "agent_waiting".to_string(),
+        "idle, waiting for assignment".to_string(),
+    );
+    app.agent_progress
+        .insert("agent_progress_only".to_string(), "working".to_string());
+
+    assert_eq!(running_agent_count(&app), 2);
+    reconcile_subagent_activity_state(&mut app);
+    assert!(!app.agent_progress.contains_key("agent_waiting"));
 }
 
 #[test]
