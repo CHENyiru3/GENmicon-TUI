@@ -1,19 +1,18 @@
 //! Footer bar widget displaying mode, status, model, and auxiliary chips.
 //!
-//! `FooterWidget` is a pure render of a [`FooterProps`] struct: all content
-//! (labels, colors, span clusters) is computed once per redraw at a higher
-//! level, then `FooterWidget::new(props).render(area, buf)` paints the
-//! result. The widget owns no `App` knowledge; this mirrors the layout used
-//! by `HeaderWidget` (and Codex's `bottom_pane::footer::Footer`).
+//! `FooterWidget` is the app-facing wrapper around the generic
+//! `deepseek_tui_core::footer` renderer. This module owns DeepSeek/TUI-specific
+//! prop assembly, localization, retry banners, and status chips.
 
+use deepseek_tui_core::footer as core_footer;
+#[cfg(test)]
+use deepseek_tui_core::footer::{WAVE_GLYPHS, footer_working_strip_string};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Style},
-    text::{Line, Span},
-    widgets::{Paragraph, Widget},
+    text::Span,
 };
-use unicode_width::UnicodeWidthStr;
 
 use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
@@ -80,58 +79,6 @@ pub struct FooterProps {
     /// off `frame_idx` (deterministic given the frame). `None` keeps the gap
     /// as plain whitespace, which is the idle/ready state.
     pub working_strip_frame: Option<u64>,
-}
-
-const WAVE_GLYPHS: [char; 8] = [
-    '\u{2581}', // ▁
-    '\u{2582}', // ▂
-    '\u{2583}', // ▃
-    '\u{2584}', // ▄
-    '\u{2585}', // ▅
-    '\u{2586}', // ▆
-    '\u{2587}', // ▇
-    '\u{2588}', // █
-];
-
-/// One frame of the footer's live-work wave animation. `col` is the cell
-/// index inside the strip, `width` the strip's total width, `frame` the raw
-/// millisecond counter. Returns the glyph that should appear in that cell on
-/// that frame.
-///
-/// Visual: a full-width phase-shifted wave made from one-cell block-height
-/// glyphs. The earlier crest-pair animation only changed when rounded crest
-/// positions crossed a terminal cell boundary; at an 80 ms repaint cadence it
-/// read as visible hops. Sampling a few moving sine components gives every
-/// repaint a new surface while keeping the math deterministic for tests.
-#[must_use]
-pub fn footer_working_strip_glyph_at(col: usize, width: usize, frame: u64) -> char {
-    if width == 0 {
-        return ' ';
-    }
-
-    let t = frame as f64 / 1000.0;
-    let x = col as f64;
-
-    let primary = (x * 0.52 - t * 8.0).sin();
-    let swell = (x * 0.18 + t * 3.1).sin() * 0.35;
-    let shimmer = (x * 1.35 - t * 11.0).sin() * 0.12;
-    let value = ((primary + swell + shimmer) / 1.47).clamp(-1.0, 1.0);
-    let normalized = (value + 1.0) * 0.5;
-    let idx = (normalized * (WAVE_GLYPHS.len() - 1) as f64).round() as usize;
-    WAVE_GLYPHS[idx.min(WAVE_GLYPHS.len() - 1)]
-}
-
-/// Build the per-frame live-work wave string of `width` characters. Empty string
-/// when width is 0. The result is the same visual width as requested (one
-/// char per column for the selected block-height glyphs) and is safe to drop
-/// into a `Span` between the footer's left and right segments.
-#[must_use]
-pub fn footer_working_strip_string(width: usize, frame: u64) -> String {
-    let mut out = String::with_capacity(width * 4);
-    for col in 0..width {
-        out.push(footer_working_strip_glyph_at(col, width, frame));
-    }
-    out
 }
 
 /// Pulse the localized "working" label through 0–3 trailing ASCII dots
@@ -301,227 +248,43 @@ fn mode_style(app: &App) -> (&'static str, Color) {
     (label, color)
 }
 
-/// Pure-render footer. Build once per frame, then `render(area, buf)`.
-pub struct FooterWidget {
-    props: FooterProps,
-}
-
-impl FooterWidget {
-    #[must_use]
-    pub fn new(props: FooterProps) -> Self {
-        Self { props }
-    }
-
-    fn auxiliary_spans(&self, max_width: usize) -> Vec<Span<'static>> {
-        // `cost` is rendered in the left cluster now — keep it out of the
-        // right-hand chip parade. Coherence / agents / replay / cache are
-        // transient signals; they belong on the right where they appear and
-        // disappear without disturbing the steady mode·model·cost line.
-        let parts: Vec<&Vec<Span<'static>>> = [
-            &self.props.coherence,
-            &self.props.agents,
-            &self.props.reasoning_replay,
-            &self.props.cache,
-            &self.props.mcp,
-            // `worked` is the lowest-priority chip — drops first under
-            // narrow widths (the priority loop below removes from the
-            // tail). `cost` is steady info and stays in the left
-            // cluster where the eye finds it without scanning.
-            &self.props.worked,
-        ]
-        .into_iter()
-        .filter(|spans| !spans.is_empty())
-        .collect();
-
-        // Try to fit as many parts as possible, dropping from the end.
-        for end in (0..=parts.len()).rev() {
-            let mut combined: Vec<Span<'static>> = Vec::new();
-            for (i, part) in parts[..end].iter().enumerate() {
-                if i > 0 {
-                    combined.push(Span::raw("  "));
-                }
-                combined.extend(part.iter().cloned());
-            }
-            if span_width(&combined) <= max_width {
-                return combined;
-            }
+impl FooterProps {
+    fn to_core(&self) -> core_footer::FooterProps {
+        core_footer::FooterProps {
+            model: self.model.clone(),
+            mode_label: self.mode_label.to_string(),
+            mode_color: self.mode_color,
+            text_dim_color: self.text_dim_color,
+            text_hint_color: self.text_hint_color,
+            text_muted_color: self.text_muted_color,
+            footer_bg: self.footer_bg,
+            working_strip_color: palette::DEEPSEEK_SKY,
+            state_label: self.state_label.clone(),
+            state_color: self.state_color,
+            coherence: self.coherence.clone(),
+            agents: self.agents.clone(),
+            reasoning_replay: self.reasoning_replay.clone(),
+            cache: self.cache.clone(),
+            mcp: self.mcp.clone(),
+            worked: self.worked.clone(),
+            cost: self.cost.clone(),
+            toast: self.toast.as_ref().map(|toast| core_footer::FooterToast {
+                text: toast.text.clone(),
+                color: toast.color,
+            }),
+            banner: retry_banner(&self.retry),
+            working_strip_frame: self.working_strip_frame,
         }
-        Vec::new()
-    }
-
-    fn toast_spans(toast: &FooterToast, max_width: usize) -> Vec<Span<'static>> {
-        let truncated = truncate_to_width(&toast.text, max_width.max(1));
-        vec![Span::styled(truncated, Style::default().fg(toast.color))]
-    }
-
-    /// Build the left status line with priority-ordered hint dropping.
-    ///
-    /// Priority order (highest to lowest — last to drop):
-    /// 1. Mode label (always visible at any width; truncated only as a last resort)
-    /// 2. Model name (always visible; then truncated mid-word once status & cost are gone)
-    /// 3. Cost chip — drops second after status (steady-info still wants to be visible)
-    /// 4. Status label (e.g. "working", "draft") — drops first when space is tight
-    ///
-    /// At every width ≥40 cols the line never wraps mid-hint: the widget
-    /// chooses one of (`mode · model · cost · status`, `mode · model · cost`,
-    /// `mode · model`, `mode`) and renders that single line within
-    /// `max_width`. Cost lives between model and status so the eye finds
-    /// "what's this run going to cost me" without scanning past the wave.
-    fn status_line_spans(&self, max_width: usize) -> Vec<Span<'static>> {
-        if max_width == 0 {
-            return Vec::new();
-        }
-
-        let mode_label = self.props.mode_label;
-        let sep = " \u{00B7} ";
-        let model = self.props.model.as_str();
-        let show_status = self.props.state_label != "ready";
-        let status_label = self.props.state_label.as_str();
-        let cost_text = spans_text(&self.props.cost);
-        let show_cost = !cost_text.is_empty();
-
-        let mode_w = mode_label.width();
-        let sep_w = sep.width();
-        let model_w = UnicodeWidthStr::width(model);
-        let status_w = status_label.width();
-        let cost_w = cost_text.width();
-
-        // Tier 1: mode · model · cost · status — everything fits.
-        let full_w = mode_w
-            + sep_w
-            + model_w
-            + if show_cost { sep_w + cost_w } else { 0 }
-            + if show_status { sep_w + status_w } else { 0 };
-        if (show_cost || show_status) && full_w <= max_width {
-            return self.build_status_line_spans(
-                mode_label,
-                model.to_string(),
-                show_cost.then(|| cost_text.clone()),
-                show_status.then_some(status_label),
-            );
-        }
-
-        // Tier 2: mode · model · cost — drop status first.
-        if show_cost {
-            let with_cost_w = mode_w + sep_w + model_w + sep_w + cost_w;
-            if with_cost_w <= max_width {
-                return self.build_status_line_spans(
-                    mode_label,
-                    model.to_string(),
-                    Some(cost_text.clone()),
-                    None,
-                );
-            }
-        }
-
-        // Tier 3: mode · model — drop cost too.
-        let mode_model_w = mode_w + sep_w + model_w;
-        if mode_model_w <= max_width {
-            return self.build_status_line_spans(mode_label, model.to_string(), None, None);
-        }
-
-        // Tier 4: mode · <truncated model> — keep both labels visible by
-        // ellipsizing the model name. Only do this when there is enough room
-        // for at least the ellipsis ("..."). Below that we drop to mode-only.
-        let prefix_w = mode_w + sep_w;
-        if prefix_w < max_width {
-            let model_budget = max_width - prefix_w;
-            if model_budget >= 4 {
-                let truncated = truncate_to_width(model, model_budget);
-                if !truncated.is_empty() {
-                    return self.build_status_line_spans(mode_label, truncated, None, None);
-                }
-            }
-        }
-
-        // Tier 5: mode-only. If even the mode label cannot fit, truncate it
-        // so the footer never wraps to a second row.
-        if mode_w <= max_width {
-            return vec![Span::styled(
-                mode_label.to_string(),
-                Style::default().fg(self.props.mode_color),
-            )];
-        }
-        vec![Span::styled(
-            truncate_to_width(mode_label, max_width),
-            Style::default().fg(self.props.mode_color),
-        )]
-    }
-
-    fn build_status_line_spans(
-        &self,
-        mode_label: &'static str,
-        model_label: String,
-        cost: Option<String>,
-        status: Option<&str>,
-    ) -> Vec<Span<'static>> {
-        let sep = " \u{00B7} ";
-        let mut spans: Vec<Span<'static>> = Vec::new();
-        // Skip the mode chip when the user has toggled it off via
-        // `/statusline`. The widget no longer assumes mode is always
-        // present so an opt-out user doesn't see a stray separator.
-        if !mode_label.is_empty() {
-            spans.push(Span::styled(
-                mode_label.to_string(),
-                Style::default().fg(self.props.mode_color),
-            ));
-        }
-        // Same treatment for the model label — gating both keeps the bar
-        // visually tidy when only auxiliary chips remain.
-        if !model_label.is_empty() {
-            if !spans.is_empty() {
-                spans.push(Span::styled(
-                    sep.to_string(),
-                    Style::default().fg(self.props.text_dim_color),
-                ));
-            }
-            spans.push(Span::styled(
-                model_label,
-                Style::default().fg(self.props.text_hint_color),
-            ));
-        }
-        if let Some(cost_text) = cost {
-            if !spans.is_empty() {
-                spans.push(Span::styled(
-                    sep.to_string(),
-                    Style::default().fg(self.props.text_dim_color),
-                ));
-            }
-            spans.push(Span::styled(
-                cost_text,
-                Style::default().fg(self.props.text_muted_color),
-            ));
-        }
-        if let Some(status_label) = status {
-            if !spans.is_empty() {
-                spans.push(Span::styled(
-                    sep.to_string(),
-                    Style::default().fg(self.props.text_dim_color),
-                ));
-            }
-            spans.push(Span::styled(
-                status_label.to_string(),
-                Style::default().fg(self.props.state_color),
-            ));
-        }
-        spans
     }
 }
 
-fn spans_text(spans: &[Span<'_>]) -> String {
-    spans.iter().map(|s| s.content.as_ref()).collect::<String>()
-}
-
-/// Render the retry banner (#499) when the props' captured snapshot
-/// reports an active retry or a final failure. Returns `None` when idle
-/// so callers fall back to the regular status line / toast.
-fn retry_banner_spans(max_width: usize, props: &FooterProps) -> Option<Vec<Span<'static>>> {
-    let (label, color) = match &props.retry {
+/// Render the retry banner (#499) when the props' captured snapshot reports an
+/// active retry or a final failure. Core only knows that a banner outranks a
+/// toast/status line; retry semantics stay in `crates/tui`.
+fn retry_banner(retry: &crate::retry_status::RetryState) -> Option<core_footer::FooterBanner> {
+    let (text, color) = match retry {
         crate::retry_status::RetryState::Active(banner) => {
-            let secs = props.retry.seconds_remaining().unwrap_or(0);
-            // Round to 1s — we redraw each frame anyway so the
-            // countdown ticks visually without us having to schedule
-            // anything extra.
+            let secs = retry.seconds_remaining().unwrap_or(0);
             (
                 format!("⟳ retry {} in {secs}s — {}", banner.attempt, banner.reason),
                 crate::palette::STATUS_WARNING,
@@ -532,95 +295,31 @@ fn retry_banner_spans(max_width: usize, props: &FooterProps) -> Option<Vec<Span<
         }
         crate::retry_status::RetryState::Idle => return None,
     };
-    let truncated = truncate_to_width(&label, max_width);
-    Some(vec![Span::styled(truncated, Style::default().fg(color))])
+    Some(core_footer::FooterBanner { text, color })
+}
+
+/// App-facing wrapper around the generic `tui-core` footer renderer.
+pub struct FooterWidget {
+    props: FooterProps,
+}
+
+impl FooterWidget {
+    #[must_use]
+    pub fn new(props: FooterProps) -> Self {
+        Self { props }
+    }
 }
 
 impl Renderable for FooterWidget {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        if area.height == 0 || area.width == 0 {
-            return;
-        }
-        let available_width = area.width as usize;
-        if available_width == 0 {
-            return;
-        }
-
-        let right_spans = self.auxiliary_spans(available_width);
-        let right_width = span_width(&right_spans);
-        let min_gap = if right_width > 0 { 2 } else { 0 };
-        let max_left_width = available_width
-            .saturating_sub(right_width)
-            .saturating_sub(min_gap)
-            .max(1);
-
-        let left_spans = if let Some(banner) = retry_banner_spans(max_left_width, &self.props) {
-            // Retry banner takes precedence over toast and the regular
-            // status line so the user sees it loud and clear (#499).
-            // The banner clears automatically on success or on the next
-            // `TurnStarted` (engine emits the clear).
-            banner
-        } else if let Some(toast) = self.props.toast.as_ref() {
-            Self::toast_spans(toast, max_left_width)
-        } else {
-            self.status_line_spans(max_left_width)
-        };
-
-        let left_width = span_width(&left_spans);
-        let spacer_width = available_width.saturating_sub(left_width + right_width);
-
-        // When a turn is in flight, fill the gap with a thin animated water-
-        // spout strip; otherwise the gap stays as plain whitespace.
-        let spacer_span = match self.props.working_strip_frame {
-            Some(frame) if spacer_width > 0 => Span::styled(
-                footer_working_strip_string(spacer_width, frame),
-                Style::default().fg(palette::DEEPSEEK_SKY),
-            ),
-            _ => Span::raw(" ".repeat(spacer_width)),
-        };
-
-        let mut all_spans = left_spans;
-        all_spans.push(spacer_span);
-        all_spans.extend(right_spans);
-
-        let paragraph =
-            Paragraph::new(Line::from(all_spans)).style(Style::default().bg(self.props.footer_bg));
-        paragraph.render(area, buf);
+        let widget = core_footer::FooterWidget::new(self.props.to_core());
+        widget.render(area, buf);
     }
 
-    fn desired_height(&self, _width: u16) -> u16 {
-        1
+    fn desired_height(&self, width: u16) -> u16 {
+        let widget = core_footer::FooterWidget::new(self.props.to_core());
+        widget.desired_height(width)
     }
-}
-
-fn span_width(spans: &[Span<'_>]) -> usize {
-    spans.iter().map(|span| span.content.width()).sum()
-}
-
-fn truncate_to_width(text: &str, max_width: usize) -> String {
-    if max_width == 0 {
-        return String::new();
-    }
-    if UnicodeWidthStr::width(text) <= max_width {
-        return text.to_string();
-    }
-    if max_width <= 3 {
-        return text.chars().take(max_width).collect();
-    }
-
-    let mut out = String::new();
-    let mut width = 0usize;
-    let limit = max_width.saturating_sub(3);
-    for ch in text.chars() {
-        let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-        if width + ch_width > limit {
-            break;
-        }
-        out.push(ch);
-        width += ch_width;
-    }
-    out.push_str("...");
-    out
 }
 
 #[cfg(test)]

@@ -1,13 +1,18 @@
 use std::path::{Component, Path, PathBuf};
 
 use deepseek_game::render::{AsciiArtFrame, AsciiArtSource};
+use deepseek_tui_core::{
+    art::{ArtCell as StyledArtCell, ArtFrame as RenderableArtFrame, parse_ansi_art_lines},
+    game_console::{GameConsoleAreas, GameConsoleLayoutMode, split_game_console},
+    panel::{self as core_panel, ArtPanelProps, TextPanelProps, TextPanelStyles},
+};
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     prelude::Widget,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Paragraph},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -24,27 +29,16 @@ pub struct GameConsoleWidget<'a> {
     background: Color,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct GameConsoleScrollBounds {
-    pub dialogue_max_scroll: usize,
-    pub progress_max_scroll: usize,
+pub struct GameConsoleProps<'a> {
+    session: Option<&'a GameSession>,
+    player_log: Vec<String>,
+    console: GameConsoleState,
+    is_loading: bool,
+    background: Color,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct StyledArtCell {
-    symbol: char,
-    style: Style,
-}
-
-#[derive(Debug, Clone)]
-struct RenderableArtFrame {
-    ratio_cols: u16,
-    ratio_rows: u16,
-    lines: Vec<Vec<StyledArtCell>>,
-}
-
-impl<'a> GameConsoleWidget<'a> {
-    pub fn new(app: &'a App) -> Self {
+impl<'a> GameConsoleProps<'a> {
+    pub fn from_app(app: &'a App) -> Self {
         Self {
             session: app.game_session.as_ref(),
             player_log: player_log(app),
@@ -53,16 +47,34 @@ impl<'a> GameConsoleWidget<'a> {
             background: app.ui_theme.surface_bg,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GameConsoleScrollBounds {
+    pub dialogue_max_scroll: usize,
+    pub progress_max_scroll: usize,
+}
+
+impl<'a> GameConsoleWidget<'a> {
+    pub fn new(props: GameConsoleProps<'a>) -> Self {
+        Self {
+            session: props.session,
+            player_log: props.player_log,
+            console: props.console,
+            is_loading: props.is_loading,
+            background: props.background,
+        }
+    }
 
     #[cfg(test)]
     fn from_parts(session: Option<&'a GameSession>, player_log: Vec<String>) -> Self {
-        Self {
+        Self::new(GameConsoleProps {
             session,
             player_log,
             console: GameConsoleState::default(),
             is_loading: false,
             background: palette::DEEPSEEK_INK,
-        }
+        })
     }
 
     pub fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -108,62 +120,34 @@ impl<'a> GameConsoleWidget<'a> {
             return;
         }
 
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Min(1)])
-            .split(area);
-        render_game_header(session, self.is_loading, chunks[0], buf, self.background);
+        let areas = split_game_console(area);
+        render_game_header(session, self.is_loading, areas.header, buf, self.background);
 
-        if chunks[1].width >= 120 {
-            self.render_wide(session, chunks[1], buf);
-        } else if chunks[1].width >= 80 {
-            self.render_medium(session, chunks[1], buf);
-        } else {
-            self.render_narrow(session, chunks[1], buf);
+        match areas.mode {
+            GameConsoleLayoutMode::Wide => self.render_wide(session, areas, buf),
+            GameConsoleLayoutMode::Medium => self.render_medium(session, areas, buf),
+            GameConsoleLayoutMode::Narrow => self.render_narrow(session, areas, buf),
         }
     }
 
-    fn render_wide(&self, session: &LoadedGameSession, area: Rect, buf: &mut Buffer) {
-        let bottom_height = area.height.saturating_mul(38).saturating_div(100).max(8);
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(8), Constraint::Length(bottom_height)])
-            .split(area);
-        let top = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
-            .split(rows[0]);
-        self.render_scene_panel(session, top[0], buf);
-        render_figure_panel(session, top[1], buf, self.background);
-
-        let bottom = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
-            .split(rows[1]);
+    fn render_wide(&self, session: &LoadedGameSession, areas: GameConsoleAreas, buf: &mut Buffer) {
+        self.render_scene_panel(session, areas.scene, buf);
+        render_figure_panel(session, areas.figure, buf, self.background);
         render_text_panel(
             panel_label(session, "Dialogue", "对话"),
             &dialogue_lines(session, &self.player_log),
             self.console.dialogue_scroll,
             self.console.focus == GameConsoleFocus::Dialogue,
-            bottom[0],
+            areas.dialogue,
             buf,
             self.background,
         );
-        let side = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Percentage(34),
-                Constraint::Percentage(26),
-                Constraint::Percentage(26),
-                Constraint::Percentage(14),
-            ])
-            .split(bottom[1]);
         render_text_panel(
             panel_label(session, "Choices", "选择"),
             &choices_lines(session),
             0,
             false,
-            side[0],
+            areas.choices,
             buf,
             self.background,
         );
@@ -172,7 +156,7 @@ impl<'a> GameConsoleWidget<'a> {
             &status_lines(session),
             0,
             false,
-            side[1],
+            areas.status,
             buf,
             self.background,
         );
@@ -181,7 +165,7 @@ impl<'a> GameConsoleWidget<'a> {
             &tasks_lines(session),
             0,
             false,
-            side[2],
+            areas.tasks,
             buf,
             self.background,
         );
@@ -190,52 +174,35 @@ impl<'a> GameConsoleWidget<'a> {
             &items_lines(session),
             0,
             false,
-            side[3],
+            areas.items,
             buf,
             self.background,
         );
     }
 
-    fn render_medium(&self, session: &LoadedGameSession, area: Rect, buf: &mut Buffer) {
-        let hero_height = area.height.saturating_mul(46).saturating_div(100).max(10);
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(hero_height), Constraint::Min(8)])
-            .split(area);
-        let hero = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(56), Constraint::Percentage(44)])
-            .split(rows[0]);
-        self.render_scene_panel(session, hero[0], buf);
-        render_figure_panel(session, hero[1], buf, self.background);
-
-        let bottom = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
-            .split(rows[1]);
+    fn render_medium(
+        &self,
+        session: &LoadedGameSession,
+        areas: GameConsoleAreas,
+        buf: &mut Buffer,
+    ) {
+        self.render_scene_panel(session, areas.scene, buf);
+        render_figure_panel(session, areas.figure, buf, self.background);
         render_text_panel(
             panel_label(session, "Dialogue", "对话"),
             &dialogue_lines(session, &self.player_log),
             self.console.dialogue_scroll,
             self.console.focus == GameConsoleFocus::Dialogue,
-            bottom[0],
+            areas.dialogue,
             buf,
             self.background,
         );
-        let side = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Percentage(42),
-                Constraint::Percentage(28),
-                Constraint::Percentage(30),
-            ])
-            .split(bottom[1]);
         render_text_panel(
             panel_label(session, "Choices", "选择"),
             &choices_lines(session),
             0,
             false,
-            side[0],
+            areas.choices,
             buf,
             self.background,
         );
@@ -244,7 +211,7 @@ impl<'a> GameConsoleWidget<'a> {
             &status_lines(session),
             0,
             false,
-            side[1],
+            areas.status,
             buf,
             self.background,
         );
@@ -253,35 +220,26 @@ impl<'a> GameConsoleWidget<'a> {
             &tasks_lines(session),
             0,
             false,
-            side[2],
+            areas.tasks,
             buf,
             self.background,
         );
     }
 
-    fn render_narrow(&self, session: &LoadedGameSession, area: Rect, buf: &mut Buffer) {
-        let scene_height = area.height.saturating_mul(22).saturating_div(100).max(4);
-        let figure_height = area.height.saturating_mul(30).saturating_div(100).max(5);
-        let info_height = area.height.saturating_mul(18).saturating_div(100).max(4);
-        let choice_height = area.height.saturating_mul(16).saturating_div(100).max(3);
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(scene_height),
-                Constraint::Length(figure_height),
-                Constraint::Length(info_height),
-                Constraint::Min(5),
-                Constraint::Length(choice_height),
-            ])
-            .split(area);
-        self.render_scene_panel(session, rows[0], buf);
-        render_figure_panel(session, rows[1], buf, self.background);
+    fn render_narrow(
+        &self,
+        session: &LoadedGameSession,
+        areas: GameConsoleAreas,
+        buf: &mut Buffer,
+    ) {
+        self.render_scene_panel(session, areas.scene, buf);
+        render_figure_panel(session, areas.figure, buf, self.background);
         render_text_panel(
             panel_label(session, "Status / Tasks", "状态 / 任务"),
             &compact_info_lines(session),
             0,
             false,
-            rows[2],
+            areas.status,
             buf,
             self.background,
         );
@@ -290,7 +248,7 @@ impl<'a> GameConsoleWidget<'a> {
             &dialogue_lines(session, &self.player_log),
             self.console.dialogue_scroll,
             self.console.focus == GameConsoleFocus::Dialogue,
-            rows[3],
+            areas.dialogue,
             buf,
             self.background,
         );
@@ -299,7 +257,7 @@ impl<'a> GameConsoleWidget<'a> {
             &choices_lines(session),
             0,
             false,
-            rows[4],
+            areas.choices,
             buf,
             self.background,
         );
@@ -356,90 +314,13 @@ fn scroll_bounds_for_loaded(
         return GameConsoleScrollBounds::default();
     }
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1)])
-        .split(area);
-    let area = chunks[1];
-    if area.width >= 120 {
-        scroll_bounds_wide(session, player_log, area)
-    } else if area.width >= 80 {
-        scroll_bounds_medium(session, player_log, area)
-    } else {
-        scroll_bounds_narrow(session, player_log, area)
-    }
-}
-
-fn scroll_bounds_wide(
-    session: &LoadedGameSession,
-    player_log: &[String],
-    area: Rect,
-) -> GameConsoleScrollBounds {
-    let bottom_height = area.height.saturating_mul(38).saturating_div(100).max(8);
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(8), Constraint::Length(bottom_height)])
-        .split(area);
-    let top = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
-        .split(rows[0]);
-    let bottom = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
-        .split(rows[1]);
+    let areas = split_game_console(area);
     GameConsoleScrollBounds {
-        dialogue_max_scroll: max_scroll_for_lines(&dialogue_lines(session, player_log), bottom[0]),
-        progress_max_scroll: scene_max_scroll(session, top[0]),
-    }
-}
-
-fn scroll_bounds_medium(
-    session: &LoadedGameSession,
-    player_log: &[String],
-    area: Rect,
-) -> GameConsoleScrollBounds {
-    let hero_height = area.height.saturating_mul(46).saturating_div(100).max(10);
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(hero_height), Constraint::Min(8)])
-        .split(area);
-    let hero = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(56), Constraint::Percentage(44)])
-        .split(rows[0]);
-    let bottom = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
-        .split(rows[1]);
-    GameConsoleScrollBounds {
-        dialogue_max_scroll: max_scroll_for_lines(&dialogue_lines(session, player_log), bottom[0]),
-        progress_max_scroll: scene_max_scroll(session, hero[0]),
-    }
-}
-
-fn scroll_bounds_narrow(
-    session: &LoadedGameSession,
-    player_log: &[String],
-    area: Rect,
-) -> GameConsoleScrollBounds {
-    let scene_height = area.height.saturating_mul(22).saturating_div(100).max(4);
-    let figure_height = area.height.saturating_mul(30).saturating_div(100).max(5);
-    let info_height = area.height.saturating_mul(18).saturating_div(100).max(4);
-    let choice_height = area.height.saturating_mul(16).saturating_div(100).max(3);
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(scene_height),
-            Constraint::Length(figure_height),
-            Constraint::Length(info_height),
-            Constraint::Min(5),
-            Constraint::Length(choice_height),
-        ])
-        .split(area);
-    GameConsoleScrollBounds {
-        dialogue_max_scroll: max_scroll_for_lines(&dialogue_lines(session, player_log), rows[3]),
-        progress_max_scroll: scene_max_scroll(session, rows[0]),
+        dialogue_max_scroll: max_scroll_for_lines(
+            &dialogue_lines(session, player_log),
+            areas.dialogue,
+        ),
+        progress_max_scroll: scene_max_scroll(session, areas.scene),
     }
 }
 
@@ -452,9 +333,8 @@ fn scene_max_scroll(session: &LoadedGameSession, area: Rect) -> usize {
 }
 
 fn max_scroll_for_lines(lines: &[String], area: Rect) -> usize {
-    let inner = panel_inner(area);
-    let total_visual_lines = visual_line_count(lines, inner.width);
-    total_visual_lines.saturating_sub(usize::from(inner.height))
+    let inner = core_panel::bordered_panel_inner(area);
+    core_panel::max_scroll_for_lines(lines, inner)
 }
 
 fn render_game_header(
@@ -535,52 +415,18 @@ fn render_art_or_text_panel(
     buf: &mut Buffer,
     background: Color,
 ) {
-    let block = panel_block(title, background, false);
-    let inner = block.inner(area);
-    block.render(area, buf);
-
-    if let Some(frame) = art {
-        let fitted = fixed_ratio_rect(inner, frame.ratio_cols, frame.ratio_rows);
-        if fitted.width > 0 && fitted.height > 0 {
-            let scaled = scale_renderable_art_lines(&frame.lines, fitted.width, fitted.height);
-            if !scaled.is_empty() {
-                let art_height = u16::try_from(scaled.len()).unwrap_or(fitted.height);
-                let y_offset = fitted.height.saturating_sub(art_height).saturating_div(2);
-                let lines = scaled
-                    .into_iter()
-                    .map(|cells| {
-                        Line::from(
-                            cells
-                                .into_iter()
-                                .map(|cell| Span::styled(cell.symbol.to_string(), cell.style))
-                                .collect::<Vec<_>>(),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                let art_area = Rect {
-                    x: fitted.x,
-                    y: fitted.y.saturating_add(y_offset),
-                    width: fitted.width,
-                    height: art_height.min(fitted.height),
-                };
-                Paragraph::new(lines)
-                    .alignment(ratatui::layout::Alignment::Center)
-                    .style(Style::default().bg(background))
-                    .render(art_area, buf);
-                return;
-            }
-            let art_area = Rect {
-                x: fitted.x,
-                y: fitted.y,
-                width: fitted.width,
-                height: fitted.height,
-            };
-            render_lines(fallback_lines(fallback), 0, art_area, buf, background);
-            return;
-        }
-    }
-
-    render_lines(fallback_lines(fallback), 0, inner, buf, background);
+    let fallback_lines = fallback_lines(fallback);
+    core_panel::render_art_or_text_panel(
+        ArtPanelProps {
+            title,
+            art,
+            fallback_lines: &fallback_lines,
+            empty_message: "No visible information yet.",
+            styles: game_text_panel_styles(background),
+        },
+        area,
+        buf,
+    );
 }
 
 fn render_text_panel(
@@ -592,87 +438,30 @@ fn render_text_panel(
     buf: &mut Buffer,
     background: Color,
 ) {
-    let block = panel_block(title, background, focused);
-    let inner = panel_inner(area);
-    block.render(area, buf);
-    render_lines(lines.to_vec(), scroll, inner, buf, background);
+    core_panel::render_text_panel(
+        TextPanelProps {
+            title,
+            lines,
+            scroll,
+            focused,
+            empty_message: "No visible information yet.",
+            styles: game_text_panel_styles(background),
+        },
+        area,
+        buf,
+    );
 }
 
-fn render_lines(
-    lines: Vec<String>,
-    scroll: usize,
-    area: Rect,
-    buf: &mut Buffer,
-    background: Color,
-) {
-    let total_visual_lines = visual_line_count(&lines, area.width);
-    let content = if lines.is_empty() {
-        vec![Line::from(Span::styled(
-            "No visible information yet.",
-            Style::default().fg(palette::TEXT_MUTED),
-        ))]
-    } else {
-        lines
-            .into_iter()
-            .map(|line| {
-                Line::from(Span::styled(
-                    line,
-                    Style::default().fg(palette::TEXT_PRIMARY),
-                ))
-            })
-            .collect()
-    };
-    let max_scroll = total_visual_lines.saturating_sub(usize::from(area.height));
-    let scroll = scroll.min(max_scroll);
-    Paragraph::new(content)
-        .wrap(Wrap { trim: false })
-        .scroll((scroll.min(usize::from(u16::MAX)) as u16, 0))
-        .style(Style::default().bg(background))
-        .render(area, buf);
-}
-
-fn panel_inner(area: Rect) -> Rect {
-    Block::default().borders(Borders::ALL).inner(area)
-}
-
-fn visual_line_count(lines: &[String], width: u16) -> usize {
-    if lines.is_empty() {
-        1
-    } else {
-        lines
-            .iter()
-            .map(|line| wrapped_line_count(line, width))
-            .sum()
+fn game_text_panel_styles(background: Color) -> TextPanelStyles {
+    TextPanelStyles {
+        background,
+        border: palette::BORDER_COLOR,
+        focused_border: palette::DEEPSEEK_SKY,
+        title: palette::TEXT_MUTED,
+        focused_title: palette::TEXT_PRIMARY,
+        text: palette::TEXT_PRIMARY,
+        muted: palette::TEXT_MUTED,
     }
-}
-
-fn wrapped_line_count(line: &str, width: u16) -> usize {
-    let width = usize::from(width.max(1));
-    let line_width = UnicodeWidthStr::width(line);
-    line_width
-        .saturating_add(width - 1)
-        .saturating_div(width)
-        .max(1)
-}
-
-fn panel_block(title: &str, background: Color, focused: bool) -> Block<'static> {
-    let border = if focused {
-        palette::DEEPSEEK_SKY
-    } else {
-        palette::BORDER_COLOR
-    };
-    Block::default()
-        .title(Line::from(Span::styled(
-            format!(" {title} "),
-            Style::default().fg(if focused {
-                palette::TEXT_PRIMARY
-            } else {
-                palette::TEXT_MUTED
-            }),
-        )))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border))
-        .style(Style::default().bg(background))
 }
 
 fn status_lines(session: &LoadedGameSession) -> Vec<String> {
@@ -1025,264 +814,6 @@ fn resolve_art_path(game_root: &Path, source_path: &str) -> Option<PathBuf> {
     Some(game_root.join(raw))
 }
 
-fn parse_ansi_art_lines(raw: &str) -> Vec<Vec<StyledArtCell>> {
-    let mut rows = Vec::new();
-    let mut row = Vec::new();
-    let mut style = Style::default();
-    let mut chars = raw.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        match ch {
-            '\u{1b}' => {
-                if chars.peek() == Some(&'[') {
-                    let _ = chars.next();
-                    let mut sequence = String::new();
-                    for next in chars.by_ref() {
-                        if ('@'..='~').contains(&next) {
-                            if next == 'm' {
-                                apply_sgr_sequence(&sequence, &mut style);
-                            }
-                            break;
-                        }
-                        sequence.push(next);
-                    }
-                } else {
-                    skip_unsupported_escape(&mut chars);
-                }
-            }
-            '\n' => {
-                if !row.is_empty() {
-                    rows.push(std::mem::take(&mut row));
-                }
-            }
-            '\r' => {}
-            symbol => row.push(StyledArtCell { symbol, style }),
-        }
-    }
-
-    if !row.is_empty() {
-        rows.push(row);
-    }
-    rows
-}
-
-fn skip_unsupported_escape<I>(chars: &mut std::iter::Peekable<I>)
-where
-    I: Iterator<Item = char>,
-{
-    match chars.peek().copied() {
-        Some(']') => {
-            let _ = chars.next();
-            let mut previous_was_escape = false;
-            for next in chars.by_ref() {
-                if next == '\u{7}' || (previous_was_escape && next == '\\') {
-                    break;
-                }
-                previous_was_escape = next == '\u{1b}';
-            }
-        }
-        Some('P' | '^' | '_' | 'X') => {
-            let _ = chars.next();
-            let mut previous_was_escape = false;
-            for next in chars.by_ref() {
-                if previous_was_escape && next == '\\' {
-                    break;
-                }
-                previous_was_escape = next == '\u{1b}';
-            }
-        }
-        Some(_) => {
-            let _ = chars.next();
-        }
-        None => {}
-    }
-}
-
-fn apply_sgr_sequence(sequence: &str, style: &mut Style) {
-    let values = if sequence.trim().is_empty() {
-        vec![Some(0)]
-    } else {
-        sequence
-            .split(';')
-            .map(|part| part.parse::<u16>().ok())
-            .collect::<Vec<_>>()
-    };
-
-    let mut index = 0usize;
-    while index < values.len() {
-        match values[index] {
-            Some(0) => {
-                *style = Style::default();
-                index += 1;
-            }
-            Some(1) => {
-                *style = style.add_modifier(Modifier::BOLD);
-                index += 1;
-            }
-            Some(22) => {
-                *style = style.remove_modifier(Modifier::BOLD);
-                index += 1;
-            }
-            Some(30..=37) => {
-                *style = style.fg(ansi16_color(values[index].unwrap_or(39), false));
-                index += 1;
-            }
-            Some(40..=47) => {
-                *style = style.bg(ansi16_color(values[index].unwrap_or(49) - 10, false));
-                index += 1;
-            }
-            Some(90..=97) => {
-                *style = style.fg(ansi16_color(values[index].unwrap_or(99) - 60, true));
-                index += 1;
-            }
-            Some(100..=107) => {
-                *style = style.bg(ansi16_color(values[index].unwrap_or(109) - 70, true));
-                index += 1;
-            }
-            Some(38) | Some(48) => {
-                let is_foreground = values[index] == Some(38);
-                if values.get(index + 1) == Some(&Some(2))
-                    && let (Some(Some(r)), Some(Some(g)), Some(Some(b))) = (
-                        values.get(index + 2),
-                        values.get(index + 3),
-                        values.get(index + 4),
-                    )
-                    && let (Ok(r), Ok(g), Ok(b)) =
-                        (u8::try_from(*r), u8::try_from(*g), u8::try_from(*b))
-                {
-                    let color = Color::Rgb(r, g, b);
-                    *style = if is_foreground {
-                        style.fg(color)
-                    } else {
-                        style.bg(color)
-                    };
-                    index += 5;
-                    continue;
-                }
-                if values.get(index + 1) == Some(&Some(5))
-                    && let Some(Some(value)) = values.get(index + 2)
-                    && let Ok(indexed) = u8::try_from(*value)
-                {
-                    let color = Color::Indexed(indexed);
-                    *style = if is_foreground {
-                        style.fg(color)
-                    } else {
-                        style.bg(color)
-                    };
-                    index += 3;
-                    continue;
-                }
-                index += 1;
-            }
-            Some(39) => {
-                *style = style.fg(Color::Reset);
-                index += 1;
-            }
-            Some(49) => {
-                *style = style.bg(Color::Reset);
-                index += 1;
-            }
-            _ => {
-                index += 1;
-            }
-        }
-    }
-}
-
-fn ansi16_color(code: u16, bright: bool) -> Color {
-    match (code, bright) {
-        (30, false) => Color::Black,
-        (31, false) => Color::Red,
-        (32, false) => Color::Green,
-        (33, false) => Color::Yellow,
-        (34, false) => Color::Blue,
-        (35, false) => Color::Magenta,
-        (36, false) => Color::Cyan,
-        (37, false) => Color::Gray,
-        (30, true) => Color::DarkGray,
-        (31, true) => Color::LightRed,
-        (32, true) => Color::LightGreen,
-        (33, true) => Color::LightYellow,
-        (34, true) => Color::LightBlue,
-        (35, true) => Color::LightMagenta,
-        (36, true) => Color::LightCyan,
-        (37, true) => Color::White,
-        _ => Color::Reset,
-    }
-}
-
-fn scale_renderable_art_lines(
-    lines: &[Vec<StyledArtCell>],
-    width: u16,
-    height: u16,
-) -> Vec<Vec<StyledArtCell>> {
-    let target_width = usize::from(width);
-    let target_height = usize::from(height);
-    if target_width == 0 || target_height == 0 || lines.is_empty() {
-        return Vec::new();
-    }
-
-    let source_height = lines.len();
-    let output_height = source_height.min(target_height);
-    (0..output_height)
-        .map(|row| {
-            let source_row = row.saturating_mul(source_height) / output_height;
-            scale_renderable_art_line(&lines[source_row], target_width)
-        })
-        .collect()
-}
-
-fn scale_renderable_art_line(line: &[StyledArtCell], target_width: usize) -> Vec<StyledArtCell> {
-    if target_width == 0 {
-        return Vec::new();
-    }
-    if line.len() <= target_width {
-        return line.to_vec();
-    }
-    (0..target_width)
-        .map(|col| {
-            let source_col = col.saturating_mul(line.len()) / target_width;
-            line[source_col]
-        })
-        .collect()
-}
-
-fn fixed_ratio_rect(area: Rect, ratio_cols: u16, ratio_rows: u16) -> Rect {
-    if area.width == 0 || area.height == 0 {
-        return area;
-    }
-    let ratio_cols = u32::from(ratio_cols.max(1));
-    let ratio_rows = u32::from(ratio_rows.max(1));
-    let area_width = u32::from(area.width);
-    let area_height = u32::from(area.height);
-
-    let (width, height) =
-        if area_width.saturating_mul(ratio_rows) > area_height.saturating_mul(ratio_cols) {
-            let width = area_height
-                .saturating_mul(ratio_cols)
-                .saturating_div(ratio_rows)
-                .max(1);
-            (width.min(area_width), area_height)
-        } else {
-            let height = area_width
-                .saturating_mul(ratio_rows)
-                .saturating_div(ratio_cols)
-                .max(1);
-            (area_width, height.min(area_height))
-        };
-
-    Rect {
-        x: area
-            .x
-            .saturating_add((area.width.saturating_sub(width as u16)) / 2),
-        y: area
-            .y
-            .saturating_add((area.height.saturating_sub(height as u16)) / 2),
-        width: width as u16,
-        height: height as u16,
-    }
-}
-
 fn fit_line(text: &str, width: usize) -> String {
     if width == 0 || UnicodeWidthStr::width(text) <= width {
         return text.to_string();
@@ -1357,7 +888,7 @@ mod tests {
     #[test]
     fn fixed_ratio_rect_stays_inside_area() {
         let area = Rect::new(2, 3, 40, 10);
-        let fitted = fixed_ratio_rect(area, 4, 3);
+        let fitted = deepseek_tui_core::art::fit_rect_to_ratio(area, 4, 3);
         assert!(fitted.x >= area.x);
         assert!(fitted.y >= area.y);
         assert!(fitted.right() <= area.right());
@@ -1464,7 +995,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let scaled = scale_renderable_art_lines(&source, 37, 11);
+        let scaled = deepseek_tui_core::art::scale_art_lines(&source, 37, 11);
 
         assert_eq!(scaled.len(), 11);
         assert!(scaled.iter().all(|line| line.len() <= 37));

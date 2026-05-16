@@ -64,6 +64,11 @@ Validation I expect:
 
 - `score_action` calculates deterministic action scoring through
   `scripts/affection.star`.
+- Ordinary `score_action` results stay within the driver's declared scoring
+  range. Cartridge-specific terminal sentinels, such as the reconciliation
+  demo's `relationship_score = -100` violent failure marker, belong in that
+  game's save contract and commit normalization rather than in reusable driver
+  semantics.
 - The generic `dialogue` role can expand into an active NPC pack, such as
   `dialogue_girlfriend`, based on save data.
 - The driver supports the reconciliation demo's chat, move, and reflection

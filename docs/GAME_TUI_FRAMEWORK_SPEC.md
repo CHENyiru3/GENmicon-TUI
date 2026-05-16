@@ -1108,6 +1108,11 @@ resulting state, appends one turn-log line, and writes the new state atomically
 from the caller's point of view. If the fact gate blocks the turn, the tool
 returns a non-mutating block result instead of writing.
 
+Driver outputs are ordinary state estimates, not the only legal save values.
+If a cartridge uses a terminal sentinel outside a driver range, the sentinel
+must be documented in the game save contract, tied to explicit terminal state
+flags/nodes, and covered by a focused commit-normalization test.
+
 Game tools are part of the model-visible surface only when an active
 `GameSession` exists. Any future ABI change must update `docs/TOOL_SURFACE.md`,
 command help text, localization message IDs, and tests in the same patch.

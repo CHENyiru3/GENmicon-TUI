@@ -1,6 +1,6 @@
 # 2026-05-10 Goal: Optimize Reconciliation Demo Game Framework
 
-Status: Active management note
+Status: Complete for P0 prompt/control inventory; follow-up runtime gates remain tracked below
 Owner: Maintainer
 Primary fixture: `examples/games/reconciliation-demo`
 Primary spec: `SPEC_files/games/reconciliation-demo.md`
@@ -51,7 +51,7 @@ P0 change queue:
 - [x] Deduplicate repeated Game Console rules from the reconciliation entry
       skill and galgame driver skill.
 - [x] Add tests for prompt duplication and prompt-file composition.
-- [ ] Decide whether `relationship_score = -100` is an intentional terminal
+- [x] Decide whether `relationship_score = -100` is an intentional terminal
       override or a controller bug.
 
 Things to stop doing:
@@ -769,10 +769,11 @@ Scoring behavior:
 
 Management note:
 
-- Current live saves show score `-100`, which is outside driver clamp. If this
-  is intentional as a terminal failure marker, document it in the save contract.
-  If not, normalize commit behavior or fixtures so score stays within the
-  driver-defined range.
+- `relationship_score = -100` is an intentional reconciliation-demo terminal
+  save sentinel for violent/coercive `pressure_failure`, not ordinary galgame
+  driver scoring. Normal driver results remain clamped to `[-3, 5]`; the
+  terminal override is documented in `SPEC_files/games/reconciliation-demo.md`
+  and covered by the commit-normalization test.
 
 ### `game_commit_turn` call
 
@@ -843,7 +844,7 @@ Commit rules:
 
 - [ ] Decide whether live `saves/default` should remain a failed revision-5
       artifact or be reset from `save_templates/default` for demo usability.
-- [ ] Explain or fix `relationship_score = -100` in failed saves, because the
+- [x] Explain or fix `relationship_score = -100` in failed saves, because the
       driver clamps scores to `[-3, 5]`.
 - [ ] Keep `story.active_node` and `story.branches.mainline.head` aligned in
       every commit and save fixture.
@@ -997,7 +998,7 @@ Failure modes to reduce:
       > driver skill > NPC proposal > storytelling style.
 - [x] Add tests that assert the main prompt includes the controller once and
       does not duplicate major rule paragraphs across game blocks.
-- [ ] Decide whether `relationship_score = -100` is a terminal-state override
+- [x] Decide whether `relationship_score = -100` is a terminal-state override
       or a controller bug.
 - [x] Document the controller model in `docs/GAME_TUI_FRAMEWORK_SPEC.md` after
       the reconciliation demo proves it.
@@ -1022,16 +1023,21 @@ Failure modes to reduce:
 - `SPEC_files/13_GAME_TUI_FRAMEWORK_SPEC.md`: records the merged Game Console
   prompt as the cross-cutting prompt contract and validation gate.
 - `SPEC_files/games/reconciliation-demo.md`: keeps the demo spec aligned with
-  controller-owned turn rules and fixture-owned content policy.
+  controller-owned turn rules, fixture-owned content policy, and the `-100`
+  terminal failure sentinel.
 - `SPEC_files/game_driver/drivers/galgame.md`: keeps the driver spec aligned
-  with driver-owned scoring policy and controller-owned guardrails.
+  with driver-owned scoring policy, controller-owned guardrails, and the
+  boundary between ordinary driver scores and cartridge-owned terminal
+  sentinels.
 
 Validated with:
 
 - `cargo fmt --all -- --check`
+- `cargo test -p deepseek-game --all-features`
 - `cargo test -p deepseek-tui game_prompt_injects_single_turn_controller`
 - `cargo test -p deepseek-tui game_turn_controller_pins_commit_and_player_mode_invariants`
 - `cargo test -p deepseek-tui bundled_reconciliation_demo_loads_with_local_driver`
+- `cargo test -p deepseek-tui reconciliation_commit_normalization_updates_visible_state_for_violence`
 
 ## Requirement-To-Evidence Map
 
@@ -1051,14 +1057,16 @@ This map keeps the goal file auditable as the optimization work progresses.
 | Reduce duplicated prompt rules | Reconciliation and galgame skill files defer shared turn control to the controller. | Implemented |
 | Sync related SPEC files | Top-level Game TUI, reconciliation demo, and galgame driver specs reference the merged Game Console prompt and ownership boundaries. | Implemented |
 | Prove prompt behavior with tests | Focused prompt tests assert single controller injection and key invariants. | Implemented |
+| Decide `relationship_score = -100` behavior | Demo save contract reserves `-100` as a terminal violent pressure-failure sentinel; driver spec keeps normal scoring separate; commit-normalization test covers the override. | Implemented |
 | Reduce actual runtime complexity beyond prompts | Requires follow-up code changes beyond prompt files. | Not started |
 
-Completion standard for the broader optimization:
+Completion standard for this management goal:
 
 - This goal file is complete when it can guide implementation without another
   prompt-inventory pass.
-- The runtime optimization is complete only after code and tests enforce the
-  controller loop, priority order, minimal tool use, and stability invariants.
+- Broader runtime optimization is separate follow-up work and is complete only
+  after code and tests enforce the controller loop, priority order, minimal tool
+  use, and stability invariants.
 
 ## Acceptance Checklist For This Goal
 

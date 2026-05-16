@@ -91,6 +91,12 @@ Validation I expect:
 - Required save files include `STATE.json`, `TURN_LOG.jsonl`, and
   `AGENTS.json`.
 - `story.branches.mainline.head` points at the active beat.
+- `player.stats.relationship_score` normally follows the `galgame`
+  `score_action` driver range. The value `-100` is reserved by this demo as a
+  terminal failure sentinel for violent/coercive physical pressure, not as an
+  ordinary driver score. A save using `-100` must also end the scene on
+  `pressure_failure`, keep the mainline head aligned with that node, and record
+  pressure/violence flags.
 - `TURN_LOG.jsonl` records committed turns.
 - `AGENTS.json` declares restartable processors: `state`, `plot`, and
   `dialogue_girlfriend`.

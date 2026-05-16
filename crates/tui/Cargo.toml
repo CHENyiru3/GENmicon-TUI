@@ -23,6 +23,7 @@ anyhow = "1.0.100"
 arboard = "3.4"
 deepseek-secrets = { path = "../secrets", version = "0.8.23" }
 deepseek-game = { path = "../game", version = "0.8.23" }
+deepseek-tui-core = { path = "../tui-core", version = "0.8.23" }
 deepseek-tools = { path = "../tools", version = "0.8.23" }
 schemaui = { version = "0.12.0", default-features = false, optional = true }
 async-stream = "0.3.6"

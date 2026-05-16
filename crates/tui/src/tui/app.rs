@@ -4469,8 +4469,10 @@ mod tests {
 
     #[test]
     fn game_console_scroll_up_moves_off_bottom_sentinel() {
-        let mut state = GameConsoleState::default();
-        state.dialogue_scroll = usize::MAX;
+        let mut state = GameConsoleState {
+            dialogue_scroll: usize::MAX,
+            ..GameConsoleState::default()
+        };
         state.update_scroll_bounds(40, 0);
         assert_eq!(state.dialogue_scroll, 40);
 

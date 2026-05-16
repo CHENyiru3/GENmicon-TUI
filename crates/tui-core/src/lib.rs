@@ -1,3 +1,16 @@
+pub mod art;
+pub mod footer;
+pub mod game_console;
+pub mod header;
+pub mod layout;
+pub mod list;
+pub mod panel;
+pub mod renderable;
+pub mod text;
+pub mod theme;
+
+pub use renderable::Renderable;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pane {
     Chat,

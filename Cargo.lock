@@ -1317,6 +1317,7 @@ dependencies = [
  "deepseek-game",
  "deepseek-secrets",
  "deepseek-tools",
+ "deepseek-tui-core",
  "dirs",
  "dotenvy",
  "fd-lock",
@@ -1388,6 +1389,11 @@ dependencies = [
 [[package]]
 name = "deepseek-tui-core"
 version = "0.8.23"
+dependencies = [
+ "ratatui",
+ "unicode-segmentation",
+ "unicode-width 0.2.0",
+]
 
 [[package]]
 name = "deltae"
